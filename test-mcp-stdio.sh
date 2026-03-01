@@ -175,19 +175,19 @@ call_tool 4 "dns_query - google.com A record" \
     '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"dns_query","arguments":{"domain":"google.com"}}}'
 
 call_tool 5 "dns_dig_style - google.com (DNSSEC flags)" \
-    '{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"dns_dig_style","arguments":{"domain":"google.com","nameserver":"8.8.8.8"}}}'
+    '{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"dns_dig_style","arguments":{"domain":"google.com","nameserver":"9.9.9.9"}}}'
 
 call_tool 6 "dns_query - lab.deflationhollow.net A record" \
     '{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"dns_query","arguments":{"domain":"lab.deflationhollow.net"}}}'
 
 call_tool 7 "dns_dig_style - lab.deflationhollow.net (DNSSEC)" \
-    '{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"dns_dig_style","arguments":{"domain":"lab.deflationhollow.net","nameserver":"8.8.8.8"}}}'
+    '{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"dns_dig_style","arguments":{"domain":"lab.deflationhollow.net","nameserver":"9.9.9.9"}}}'
 
-call_tool 8 "reverse_dns - 8.8.8.8" \
-    '{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"reverse_dns","arguments":{"ip_address":"8.8.8.8"}}}'
+call_tool 8 "reverse_dns - 9.9.9.9" \
+    '{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"reverse_dns","arguments":{"ip_address":"9.9.9.9"}}}'
 
 call_tool 9 "dns_dnssec_validate - claude.lab.deflationhollow.net (chain of trust)" \
-    '{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"dns_dnssec_validate","arguments":{"domain":"claude.lab.deflationhollow.net","record_type":"A","nameserver":"8.8.8.8"}}}'
+    '{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"dns_dnssec_validate","arguments":{"domain":"claude.lab.deflationhollow.net","record_type":"A","nameserver":"9.9.9.9"}}}'
 
 call_tool 10 "nsec_info - cloudflare.com (NSEC/NSEC3 analysis)" \
     '{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"nsec_info","arguments":{"domain":"cloudflare.com"}}}'

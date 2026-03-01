@@ -89,7 +89,7 @@ Config file location:
 - **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
 - **Linux**: `~/.config/Claude/claude_desktop_config.json`
 
-The `--dns 8.8.8.8` flag ensures DNSSEC-correct resolution regardless of the
+The `--dns 9.9.9.9` flag ensures DNSSEC-correct resolution regardless of the
 host's DNS configuration.
 
 ### 3. Verify

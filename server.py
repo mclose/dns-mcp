@@ -211,7 +211,7 @@ def dns_query(
         "A", "AAAA", "MX", "TXT", "NS", "SOA", "CNAME", "PTR", "SRV"
     ] = "A",
     nameserver: str | None = Field(
-        default=None, description="Optional nameserver IP (e.g., '8.8.8.8')"
+        default=None, description="Optional nameserver IP (e.g., '9.9.9.9')"
     ),
 ) -> dict:
     """
@@ -320,7 +320,7 @@ def dns_dig_style(
     record_type: Literal[
         "A", "AAAA", "MX", "TXT", "NS", "SOA", "CNAME", "PTR", "SRV"
     ] = "A",
-    nameserver: str = Field(default="8.8.8.8", description="Nameserver to query"),
+    nameserver: str = Field(default="9.9.9.9", description="Nameserver to query"),
 ) -> dict:
     """
     Perform a dig-style DNS query showing full response details.
@@ -540,7 +540,7 @@ def dns_dnssec_validate(
     ),
     record_type: Literal["A", "AAAA", "MX", "TXT", "NS", "SOA", "CNAME"] = "A",
     nameserver: str = Field(
-        default="8.8.8.8", description="DNSSEC-validating resolver to use"
+        default="9.9.9.9", description="DNSSEC-validating resolver to use"
     ),
 ) -> dict:
     """
@@ -1517,11 +1517,11 @@ def check_dane(
         }
 
         try:
-            # Query TLSA with DNSSEC (DO flag) via 8.8.8.8
+            # Query TLSA with DNSSEC (DO flag) via 9.9.9.9
             query = dns.message.make_query(
                 tlsa_fqdn, dns.rdatatype.TLSA, want_dnssec=True
             )
-            response = dns.query.udp(query, "8.8.8.8", timeout=5.0)
+            response = dns.query.udp(query, "9.9.9.9", timeout=5.0)
 
             # Check AD flag
             ad_flag = bool(response.flags & dns.flags.AD)
