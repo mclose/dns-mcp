@@ -1,0 +1,23 @@
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.4
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+
+  - repo: local
+    hooks:
+      - id: pytest
+        name: pytest
+        entry: docker compose run --rm dns-mcp pytest tests/ -q
+        language: system
+        pass_filenames: false
+        stages: [pre-push]
+
+      - id: stdio-e2e
+        name: stdio e2e
+        entry: ./test-mcp-stdio.sh
+        language: system
+        pass_filenames: false
+        stages: [pre-push]

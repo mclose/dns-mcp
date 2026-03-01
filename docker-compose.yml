@@ -1,0 +1,4 @@
+services:
+  dns-mcp:
+    build: .
+    image: dns-mcp
