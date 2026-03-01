@@ -44,12 +44,19 @@ through Claude in real time.
 
 Ask Claude: *"Check the email security posture of deflationhollow.net"*
 
-Claude will call `check_spf`, `check_dmarc`, `check_dkim_selector`, 
-`check_dane`, and `check_bimi` in sequence and give you a complete 
-analysis — SPF include chain, DMARC policy enforcement level, DANE 
-TLSA validation against DNSSEC, and whether BIMI is configured.
+Claude calls `check_spf`, `check_dmarc`, `check_dane`, `check_mta_sts`, 
+and `check_bimi` in sequence and returns a complete analysis:
+```
+✅ SPF: Hard fail (-all), delegated to ForwardEmail, 5 lookups (under RFC limit)
+✅ DMARC: p=reject, pct=100 — full enforcement, aggregate reporting configured
+⚠️  DANE: TLSA records present but unverifiable — DNSSEC not enabled on zone
+⚠️  MTA-STS: Not configured — no TLS enforcement policy published  
+⚠️  BIMI: Not configured
+```
 
-No copy-pasting dig commands. No tab switching. One question.
+**Overall: B+ — Strong fundamentals, three actionable gaps identified.**
+
+No copy-pasting dig commands. No tab-switching. One question.
 
 ## Quick Start
 
