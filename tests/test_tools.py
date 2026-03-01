@@ -32,6 +32,7 @@ from server import (
     check_smtp_tlsrpt,
     rdap_lookup,
     check_dane,
+    detect_hijacking,
 )
 
 
@@ -1088,3 +1089,76 @@ class TestQuine:
         assert "lines" in result
         assert result["lines"] > 0
         assert result["file"].endswith("server.py")
+
+
+# ---------------------------------------------------------------------------
+# detect_hijacking
+# ---------------------------------------------------------------------------
+
+
+class TestDetectHijacking:
+    def test_invalid_ip(self):
+        """Invalid IP returns an error dict without crashing"""
+        result = detect_hijacking(resolver="not-an-ip")
+        assert "error" in result
+        assert "resolver_tested" in result
+
+    def test_response_structure(self):
+        """Top-level response keys are all present for a valid resolver"""
+        result = detect_hijacking(resolver="8.8.8.8")
+        for key in [
+            "timestamp",
+            "resolver_tested",
+            "resolver_identity",
+            "checks",
+            "verdict",
+            "findings",
+            "errors",
+        ]:
+            assert key in result, f"Missing top-level key: {key}"
+
+    def test_checks_structure(self):
+        """All four check sub-dicts are present with their required keys"""
+        result = detect_hijacking(resolver="8.8.8.8")
+        checks = result["checks"]
+        assert "nxdomain_probe" in checks
+        assert "known_record" in checks
+        assert "dnssec_validation" in checks
+        assert "resolver_identity" in checks
+
+        nx = checks["nxdomain_probe"]
+        for key in ["domain", "expected", "got", "answer_ips", "passed"]:
+            assert key in nx, f"Missing nxdomain_probe key: {key}"
+
+        kr = checks["known_record"]
+        for key in ["domain", "expected_ip", "got_ips", "passed"]:
+            assert key in kr, f"Missing known_record key: {key}"
+
+        dv = checks["dnssec_validation"]
+        for key in ["domain", "ad_flag", "note"]:
+            assert key in dv, f"Missing dnssec_validation key: {key}"
+
+        ri = checks["resolver_identity"]
+        for key in ["query", "result"]:
+            assert key in ri, f"Missing resolver_identity key: {key}"
+
+    def test_known_good_8888(self):
+        """8.8.8.8 (Google) should return verdict=clean with no findings"""
+        result = detect_hijacking(resolver="8.8.8.8")
+        assert result["verdict"] == "clean", (
+            f"Expected clean, got {result['verdict']}: {result['findings']}"
+        )
+        assert result["findings"] == []
+
+    def test_known_good_1111(self):
+        """1.1.1.1 (Cloudflare) should return verdict=clean"""
+        result = detect_hijacking(resolver="1.1.1.1")
+        assert result["verdict"] == "clean", (
+            f"Expected clean, got {result['verdict']}: {result['findings']}"
+        )
+        assert result["findings"] == []
+
+    def test_dnssec_ad_flag_8888(self):
+        """8.8.8.8 should set the AD flag for cloudflare.com (validates DNSSEC)"""
+        result = detect_hijacking(resolver="8.8.8.8")
+        assert result["checks"]["dnssec_validation"]["ad_flag"] is True

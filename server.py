@@ -27,6 +27,7 @@ Tools provided:
   - check_smtp_tlsrpt: SMTP TLS Reporting record check
   - check_dane: DANE TLSA record check for mail server authentication
   - rdap_lookup: Domain registration data via RDAP (HTTP, not DNS)
+  - detect_hijacking: DNS hijacking and tampering detection for a resolver IP
 """
 
 from fastmcp import FastMCP
@@ -45,6 +46,8 @@ import dns.rrset
 from datetime import datetime, timezone
 from typing import Literal
 import re
+import secrets
+import ipaddress
 import requests
 from pydantic import Field
 
@@ -2048,6 +2051,205 @@ def rdap_lookup(
     }
 
 
+@mcp.tool()
+def detect_hijacking(
+    resolver: str = Field(
+        description="IP address of the resolver to test (e.g. 192.168.1.1)"
+    ),
+) -> dict:
+    """
+    Test a DNS resolver for signs of DNS hijacking or tampering.
+
+    WiFi routers and ISPs sometimes intercept DNS queries and return spoofed
+    responses — captive portals, ad-injection landing pages, or NXDOMAIN
+    redirects. This tool sends four probes directly to the specified resolver
+    and reports a clean/suspicious/hijacked verdict with per-check detail.
+
+    Checks performed:
+    1. NXDOMAIN probe — queries a random domain; hijacked resolvers return IPs
+    2. Known stable record — a.root-servers.net A must return 198.41.0.4
+    3. DNSSEC AD flag — cloudflare.com A; AD set means resolver validates DNSSEC
+    4. Resolver identity — whoami.akamai.net TXT reveals the resolver's source IP
+
+    Verdict logic:
+    - hijacked: NXDOMAIN probe returned NOERROR+IPs, OR known record IP wrong
+    - suspicious: partial failures or timeouts without a clear hijack signal
+    - clean: all checks passed
+    """
+    # Validate resolver IP
+    try:
+        ipaddress.ip_address(resolver)
+    except ValueError:
+        return {
+            "error": f"Invalid IP address: {resolver!r}",
+            "resolver_tested": resolver,
+        }
+
+    timestamp = datetime.now(timezone.utc).isoformat()
+    errors = []
+    findings = []
+
+    # -------------------------------------------------------------------------
+    # Check 1: NXDOMAIN probe
+    # -------------------------------------------------------------------------
+    probe_label = f"nxprobe-{secrets.token_hex(8)}"
+    probe_domain = f"{probe_label}.com"
+    nxdomain_check: dict = {
+        "domain": probe_domain,
+        "expected": "NXDOMAIN",
+        "got": None,
+        "answer_ips": [],
+        "passed": False,
+    }
+    try:
+        query = dns.message.make_query(probe_domain, dns.rdatatype.A)
+        response = dns.query.udp(query, resolver, timeout=5.0)
+        rcode_name = dns.rcode.to_text(response.rcode())
+        nxdomain_check["got"] = rcode_name
+        answer_ips = []
+        for rrset in response.answer:
+            if rrset.rdtype == dns.rdatatype.A:
+                answer_ips.extend(str(rr) for rr in rrset)
+        nxdomain_check["answer_ips"] = answer_ips
+        if rcode_name == "NXDOMAIN" and not answer_ips:
+            nxdomain_check["passed"] = True
+        else:
+            if answer_ips:
+                findings.append(
+                    f"NXDOMAIN probe returned {rcode_name} with IPs {answer_ips} — "
+                    "resolver is hijacking NXDOMAIN responses"
+                )
+            else:
+                findings.append(
+                    f"NXDOMAIN probe returned {rcode_name} instead of NXDOMAIN"
+                )
+    except dns.exception.Timeout:
+        nxdomain_check["got"] = "TIMEOUT"
+        errors.append(f"NXDOMAIN probe timed out querying {resolver}")
+    except Exception as e:
+        nxdomain_check["got"] = "ERROR"
+        errors.append(f"NXDOMAIN probe error: {e}")
+
+    # -------------------------------------------------------------------------
+    # Check 2: Known stable record — a.root-servers.net A = 198.41.0.4
+    # -------------------------------------------------------------------------
+    KNOWN_DOMAIN = "a.root-servers.net"
+    KNOWN_IP = "198.41.0.4"
+    known_check: dict = {
+        "domain": KNOWN_DOMAIN,
+        "expected_ip": KNOWN_IP,
+        "got_ips": [],
+        "passed": False,
+    }
+    try:
+        query = dns.message.make_query(KNOWN_DOMAIN, dns.rdatatype.A)
+        response = dns.query.udp(query, resolver, timeout=5.0)
+        got_ips = []
+        for rrset in response.answer:
+            if rrset.rdtype == dns.rdatatype.A:
+                got_ips.extend(str(rr) for rr in rrset)
+        known_check["got_ips"] = got_ips
+        if KNOWN_IP in got_ips:
+            known_check["passed"] = True
+        else:
+            if got_ips:
+                findings.append(
+                    f"{KNOWN_DOMAIN} returned {got_ips} instead of {KNOWN_IP} — "
+                    "resolver is tampering with DNS responses"
+                )
+            else:
+                findings.append(
+                    f"{KNOWN_DOMAIN} returned no A records (expected {KNOWN_IP})"
+                )
+    except dns.exception.Timeout:
+        errors.append(f"Known-record check timed out querying {resolver}")
+    except Exception as e:
+        errors.append(f"Known-record check error: {e}")
+
+    # -------------------------------------------------------------------------
+    # Check 3: DNSSEC AD flag — informational, not a hijack indicator
+    # -------------------------------------------------------------------------
+    dnssec_check: dict = {
+        "domain": "cloudflare.com",
+        "ad_flag": False,
+        "note": "",
+    }
+    try:
+        query = dns.message.make_query(
+            "cloudflare.com", dns.rdatatype.A, want_dnssec=True
+        )
+        response = dns.query.udp(query, resolver, timeout=5.0)
+        ad_set = bool(response.flags & dns.flags.AD)
+        dnssec_check["ad_flag"] = ad_set
+        dnssec_check["note"] = (
+            "Resolver performs DNSSEC validation"
+            if ad_set
+            else "Resolver does not set AD flag (may not validate DNSSEC)"
+        )
+    except dns.exception.Timeout:
+        dnssec_check["note"] = "Timed out"
+        errors.append(f"DNSSEC AD flag check timed out querying {resolver}")
+    except Exception as e:
+        dnssec_check["note"] = f"Error: {e}"
+        errors.append(f"DNSSEC AD flag check error: {e}")
+
+    # -------------------------------------------------------------------------
+    # Check 4: Resolver identity — informational
+    # -------------------------------------------------------------------------
+    identity_check: dict = {
+        "query": "whoami.akamai.net TXT",
+        "result": None,
+    }
+    try:
+        query = dns.message.make_query("whoami.akamai.net", dns.rdatatype.TXT)
+        response = dns.query.udp(query, resolver, timeout=5.0)
+        txt_values = []
+        for rrset in response.answer:
+            if rrset.rdtype == dns.rdatatype.TXT:
+                for rr in rrset:
+                    txt_values.extend(s.decode() for s in rr.strings)
+        identity_check["result"] = txt_values[0] if txt_values else None
+    except dns.exception.Timeout:
+        errors.append(f"Resolver identity check timed out querying {resolver}")
+    except Exception as e:
+        errors.append(f"Resolver identity check error: {e}")
+
+    # -------------------------------------------------------------------------
+    # Verdict
+    # -------------------------------------------------------------------------
+    nxdomain_hijacked = nxdomain_check["got"] not in (
+        None,
+        "NXDOMAIN",
+        "TIMEOUT",
+        "ERROR",
+    ) or bool(nxdomain_check["answer_ips"])
+    known_wrong = not known_check["passed"] and bool(known_check.get("got_ips"))
+
+    if nxdomain_hijacked or known_wrong:
+        verdict = "hijacked"
+    elif findings or (
+        errors and not nxdomain_check["passed"] and not known_check["passed"]
+    ):
+        verdict = "suspicious"
+    else:
+        verdict = "clean"
+
+    return {
+        "timestamp": timestamp,
+        "resolver_tested": resolver,
+        "resolver_identity": identity_check["result"],
+        "checks": {
+            "nxdomain_probe": nxdomain_check,
+            "known_record": known_check,
+            "dnssec_validation": dnssec_check,
+            "resolver_identity": identity_check,
+        },
+        "verdict": verdict,
+        "findings": findings,
+        "errors": errors,
+    }
+
+
 def _get_rdap_server(tld: str, errors: list) -> str | None:
     """Look up the RDAP server for a TLD from IANA bootstrap or fallback map."""
     global _rdap_bootstrap_cache
@@ -2091,6 +2293,7 @@ def _print_startup_banner(transport: str):
         ("rdap_lookup", "Live domain registration data via RDAP"),
         ("check_dane", "DANE TLSA + DNSSEC mail server authentication"),
         ("dns_dig_style", "Dig-style output with DNSSEC flags + DoE"),
+        ("detect_hijacking", "DNS hijacking & tampering detection"),
         ("quine", "The server reads its own source code"),
     ]
 
@@ -2110,7 +2313,7 @@ def _print_startup_banner(transport: str):
             line("   🔍  d n s - m c p", 1),
             empty,
             line("   DNS & Domain Security Analysis Server"),
-            line(f"   16 tools · DNSSEC · MCP · {transport}"),
+            line(f"   17 tools · DNSSEC · MCP · {transport}"),
             empty,
             line(f"   ✨ Spotlight: {tool}", 1),
             line(f"      {desc}"),
