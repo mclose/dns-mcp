@@ -1,9 +1,13 @@
 # DNS MCP Server
 
-A Model Context Protocol (MCP) server providing DNS lookup and email security
-analysis tools with DNSSEC chain-of-trust validation. Runs as a Docker
-container in stdio mode — Claude Desktop spawns it directly, no network or
-auth configuration required.
+Real-time DNS security analysis for Claude. Gives Claude the ability to 
+investigate domains the way a practitioner would — DNSSEC chain validation, 
+email authentication posture, and registration intelligence — without leaving 
+your Claude session.
+
+Built by a cybersecurity professional for SOC investigation workflows. 
+Not a toy — the same queries you'd run at the command line, accessible 
+through Claude in real time.
 
 ## Tools
 
@@ -16,6 +20,7 @@ auth configuration required.
 | `nsec_info` | NSEC/NSEC3 denial-of-existence analysis and zone walkability assessment |
 | `reverse_dns` | PTR record lookups for IP addresses |
 | `timestamp_converter` | Convert between ISO, epoch, and human-readable timestamps |
+| `detect_hijacking` | Test a resolver for DNS hijacking/tampering (NXDOMAIN probe, known record, DNSSEC, identity) |
 
 ### Email Security Tools
 | Tool | Description |
@@ -34,6 +39,17 @@ auth configuration required.
 |------|-------------|
 | `ping` | Health check — returns pong with timestamp |
 | `quine` | Returns the source code of this server |
+
+## Example
+
+Ask Claude: *"Check the email security posture of deflationhollow.net"*
+
+Claude will call `check_spf`, `check_dmarc`, `check_dkim_selector`, 
+`check_dane`, and `check_bimi` in sequence and give you a complete 
+analysis — SPF include chain, DMARC policy enforcement level, DANE 
+TLSA validation against DNSSEC, and whether BIMI is configured.
+
+No copy-pasting dig commands. No tab switching. One question.
 
 ## Quick Start
 
@@ -59,7 +75,7 @@ Add to your `claude_desktop_config.json`:
       "command": "docker",
       "args": [
         "run", "--rm", "-i",
-        "--dns", "8.8.8.8",
+        "--dns", "9.9.9.9",
         "dns-mcp",
         "python", "server.py"
       ]
@@ -95,7 +111,7 @@ docker run --rm -i dns-mcp python server.py
   | stdin/stdout (MCP stdio transport)
   v
 FastMCP server (server.py)
-  |  - All 16 tools
+  |  - All 17 tools
   |  - dnspython for DNS queries
   |  - requests for RDAP only
 ```
@@ -138,7 +154,7 @@ make test    # runs pytest inside container
 
 ```
 dns-mcp/
-├── server.py              # FastMCP server (16 tools, stdio transport)
+├── server.py              # FastMCP server (17 tools, stdio transport)
 ├── Dockerfile             # Single-stage Alpine image
 ├── docker-compose.yml     # Build target
 ├── Makefile               # build/test/shell
