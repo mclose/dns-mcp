@@ -1,0 +1,13 @@
+fastmcp>=3.0.0b1
+dnspython>=2.6.0
+pydantic>=2.0.0
+uvicorn>=0.27.0
+
+# Auth proxy dependencies
+flask>=3.0.0
+requests>=2.31.0
+gunicorn>=21.0.0
+
+# Testing / dev
+pytest>=8.0.0
+ruff>=0.4.0

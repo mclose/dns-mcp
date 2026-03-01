@@ -1,0 +1,56 @@
+services:
+  mcp:
+    build: .
+    container_name: dns-mcp-server
+    # Port 8083 is internal only (proxy reaches it via mcp-net)
+    # Uncomment to expose for direct debugging:
+    # ports:
+    #   - "${MCP_PORT:-8083}:8083"
+    environment:
+      - PYTHONUNBUFFERED=1
+    networks:
+      - mcp-net
+    healthcheck:
+      test: ["CMD", "sh", "-c", "curl -so /dev/null -w '%{http_code}' http://localhost:8083/mcp -H 'Accept: application/json, text/event-stream' | grep -q 400"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    restart: unless-stopped
+
+  proxy:
+    build: .
+    container_name: dns-mcp-proxy
+    command: >
+      gunicorn
+        --bind 0.0.0.0:8082
+        --timeout 0
+        --workers 4
+        --access-logfile /var/log/mcp-proxy/access.log
+        --error-logfile /var/log/mcp-proxy/error.log
+        --access-logformat '%(h)s [XFF: %({X-Forwarded-For}i)s] %(l)s %(u)s %(t)s "%(r)s" %(s)s %(b)s "%(f)s" "%(a)s"'
+        server-proxy:app
+    ports:
+      - "${PROXY_PORT:-8082}:8082"
+    environment:
+      - PYTHONUNBUFFERED=1
+      - MCP_BEARER_TOKEN=${MCP_BEARER_TOKEN:-changeme}
+      - MCP_BACKEND_URL=http://mcp:8083
+    volumes:
+      - ${LOG_PATH:-/var/log/mcp-proxy}:/var/log/mcp-proxy
+    networks:
+      - mcp-net
+    depends_on:
+      mcp:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "sh", "-c", "curl -so /dev/null -w '%{http_code}' http://localhost:8082/mcp | grep -q 401"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+networks:
+  mcp-net:
+    driver: bridge
