@@ -115,9 +115,9 @@ class TestDnsQuery:
         assert "error" in result
 
     def test_custom_nameserver(self):
-        result = dns_query("google.com", "A", nameserver="8.8.8.8")
+        result = dns_query("google.com", "A", nameserver="9.9.9.9")
         assert "error" not in result
-        assert result["nameserver"] == "8.8.8.8"
+        assert result["nameserver"] == "9.9.9.9"
 
     def test_invalid_nameserver(self):
         result = dns_query("google.com", "A", nameserver="not-an-ip")
@@ -131,7 +131,7 @@ class TestDnsQuery:
 
 class TestDnsDigStyle:
     def test_known_good_domain(self):
-        result = dns_dig_style("google.com", "A", nameserver="8.8.8.8")
+        result = dns_dig_style("google.com", "A", nameserver="9.9.9.9")
         assert "error" not in result
         assert result["query"]["domain"] == "google.com"
         assert "header" in result
@@ -140,7 +140,7 @@ class TestDnsDigStyle:
 
     def test_nxdomain(self):
         result = dns_dig_style(
-            "this-domain-does-not-exist-xyzzy.invalid", "A", nameserver="8.8.8.8"
+            "this-domain-does-not-exist-xyzzy.invalid", "A", nameserver="9.9.9.9"
         )
         # dig-style returns the response even for NXDOMAIN — check header status
         if "error" not in result:
@@ -148,7 +148,7 @@ class TestDnsDigStyle:
         # If it errored, that's also acceptable
 
     def test_bad_domain_format(self):
-        result = dns_dig_style("not valid!", "A", nameserver="8.8.8.8")
+        result = dns_dig_style("not valid!", "A", nameserver="9.9.9.9")
         assert "error" in result
 
     def test_invalid_nameserver(self):
@@ -158,7 +158,7 @@ class TestDnsDigStyle:
     def test_denial_of_existence_field(self):
         """Query a nonexistent .com domain to get NSEC3 from the DNSSEC-signed TLD"""
         result = dns_dig_style(
-            "nonexistent-probe-test-xyz-123456.com", "A", nameserver="8.8.8.8"
+            "nonexistent-probe-test-xyz-123456.com", "A", nameserver="9.9.9.9"
         )
         assert "error" not in result
         assert result["header"]["status"] == "NXDOMAIN"
@@ -377,7 +377,7 @@ class TestReverseDns:
 class TestDnssecValidate:
     def test_signed_domain(self):
         """cloudflare.com is DNSSEC-signed"""
-        result = dns_dnssec_validate("cloudflare.com", "A", nameserver="8.8.8.8")
+        result = dns_dnssec_validate("cloudflare.com", "A", nameserver="9.9.9.9")
         assert "error" not in result
         assert result["domain"] == "cloudflare.com"
         assert "chain_of_trust" in result
@@ -387,18 +387,18 @@ class TestDnssecValidate:
 
     def test_unsigned_domain(self):
         """example.com — result depends on DNSSEC chain state"""
-        result = dns_dnssec_validate("example.com", "A", nameserver="8.8.8.8")
+        result = dns_dnssec_validate("example.com", "A", nameserver="9.9.9.9")
         assert "error" not in result
         assert result["overall_status"] in ("insecure", "fully validated", "bogus")
 
     def test_nxdomain(self):
         result = dns_dnssec_validate(
-            "this-domain-does-not-exist-xyzzy.invalid", "A", nameserver="8.8.8.8"
+            "this-domain-does-not-exist-xyzzy.invalid", "A", nameserver="9.9.9.9"
         )
         assert "error" not in result or "does not exist" in result.get("error", "")
 
     def test_bad_domain(self):
-        result = dns_dnssec_validate("not valid!", "A", nameserver="8.8.8.8")
+        result = dns_dnssec_validate("not valid!", "A", nameserver="9.9.9.9")
         assert "error" in result
 
     def test_invalid_nameserver(self):
@@ -1105,7 +1105,7 @@ class TestDetectHijacking:
 
     def test_response_structure(self):
         """Top-level response keys are all present for a valid resolver"""
-        result = detect_hijacking(resolver="8.8.8.8")
+        result = detect_hijacking(resolver="9.9.9.9")
         for key in [
             "timestamp",
             "resolver_tested",
@@ -1119,7 +1119,7 @@ class TestDetectHijacking:
 
     def test_checks_structure(self):
         """All four check sub-dicts are present with their required keys"""
-        result = detect_hijacking(resolver="8.8.8.8")
+        result = detect_hijacking(resolver="9.9.9.9")
         checks = result["checks"]
         assert "nxdomain_probe" in checks
         assert "known_record" in checks
@@ -1158,7 +1158,7 @@ class TestDetectHijacking:
         )
         assert result["findings"] == []
 
-    def test_dnssec_ad_flag_8888(self):
-        """8.8.8.8 should set the AD flag for cloudflare.com (validates DNSSEC)"""
-        result = detect_hijacking(resolver="8.8.8.8")
+    def test_dnssec_ad_flag_9999(self):
+        """9.9.9.9 (Quad9) should set the AD flag for cloudflare.com (validates DNSSEC)"""
+        result = detect_hijacking(resolver="9.9.9.9")
         assert result["checks"]["dnssec_validation"]["ad_flag"] is True
