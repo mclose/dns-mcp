@@ -66,7 +66,7 @@ No copy-pasting dig commands. No tab-switching. One question.
 ### 1. Build
 
 ```bash
-git clone <repo-url> dns-mcp
+git clone https://github.com/mclose/dns-mcp.git
 cd dns-mcp
 make build
 ```
