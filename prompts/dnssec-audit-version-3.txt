@@ -1,0 +1,54 @@
+DNSSEC Validation Chain Analysis Prompt
+
+When performing DNSSEC validation from a domain to the root, provide a comprehensive chain-of-trust report with the following structure:
+
+HEADER:
+- Title: "DNSSEC Validation Chain: [target_domain] → Root"
+- Overall Status: Use ✅/❌ with descriptive text (FULLY VALIDATED (Secure), BROKEN CHAIN, INSECURE, etc.)
+- Chain summary: "Chain of Trust (N levels)"
+
+CHAIN LEVELS (iterate from root to target):
+For each level in the delegation chain, report:
+
+Level X: [zone_name]
+* DNSKEY count: N keys (list key IDs, note KSK vs ZSK roles)
+* If root zone: Note trust anchor configuration
+* DS record (if not root): Key tag, algorithm name and number, digest type and name
+* DS validation: "DS validated by [parent_zone] KSK [key_id]: ✅ SUCCESS" or "❌ FAILED"
+* DNSKEY RRset validation: "DNSKEY RRset validated by ZSK [key_id]: ✅ SUCCESS" or "❌ FAILED"
+* Status: SECURE, INSECURE, or BOGUS
+
+TARGET RECORD LEVEL:
+* Record type: [A/AAAA/MX/etc.]
+* Value: [IP or record value]
+* TTL: [seconds]
+* RRSIG: Signed by [ZSK/KSK] [key_id] ([signing_zone])
+* Signature window: [inception] → [expiration] (validity status)
+* Status: SECURE, INSECURE, or BOGUS
+
+TECHNICAL SUMMARY:
+Provide expert-level analysis including:
+- Assessment of cryptographic algorithms (note if modern best practices like ECDSAP256SHA256/algorithm 13)
+- Key management patterns (KSK/ZSK separation, key counts)
+- DS record publication status at parent zones
+- Signature validity windows and rotation indicators
+- Any observed automation patterns (dnssec-policy, automated rotation)
+- Time-to-expiration warnings if signatures expire soon
+- Overall chain integrity from IANA root trust anchor
+- Security recommendations if issues found
+
+FORMATTING RULES:
+- Use ✅ for successful validations, ❌ for failures
+- Include algorithm numbers AND names for clarity (e.g., "13 (ECDSAP256SHA256)")
+- Use digest type numbers AND names (e.g., "2 (SHA-256)")
+- Show dates in ISO format or clear "YYYY-MM-DD" style
+- Use indentation/bullets for hierarchy
+- Bold or emphasize zone transitions
+- Keep technical precision while maintaining readability
+
+TONE:
+- Authoritative and technically precise
+- Explain cryptographic details without condescension
+- Note best practices and deviations
+- Provide actionable insights in summary
+- Assume reader has DNS/DNSSEC knowledge but appreciates clarity
