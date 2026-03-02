@@ -39,3 +39,7 @@ logs/
 .pytest_cache/
 .coverage
 htmlcov/
+
+# MCP registry
+.mcpregistry_github_token
+.mcpregistry_registry_token
