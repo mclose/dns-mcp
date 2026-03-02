@@ -1,13 +1,13 @@
 # DNS MCP Server
 
-Real-time DNS security analysis for Claude. Gives Claude the ability to 
-investigate domains the way a practitioner would — DNSSEC chain validation, 
-email authentication posture, and registration intelligence — without leaving 
-your Claude session.
+Real-time DNS security analysis for AI assistants via MCP. Gives your
+assistant the ability to investigate domains the way a practitioner would —
+DNSSEC chain validation, email authentication posture, and registration
+intelligence — without leaving your chat session.
 
-Built by a cybersecurity professional for SOC investigation workflows. 
-Not a toy — the same queries you'd run at the command line, accessible 
-through Claude in real time.
+Built by a cybersecurity professional for SOC investigation workflows.
+Not a toy — the same queries you'd run at the command line, accessible
+through any MCP-compatible assistant in real time.
 
 ## Tools
 
@@ -58,9 +58,9 @@ structured report.
 
 ## Example
 
-Ask Claude: *"Check the email security posture of deflationhollow.net"*
+Ask your assistant: *"Check the email security posture of deflationhollow.net"*
 
-Claude calls `check_spf`, `check_dmarc`, `check_dane`, `check_mta_sts`, 
+The assistant calls `check_spf`, `check_dmarc`, `check_dane`, `check_mta_sts`,
 and `check_bimi` in sequence and returns a complete analysis:
 ```
 ✅ SPF: Hard fail (-all), delegated to ForwardEmail, 5 lookups (under RFC limit)
@@ -87,9 +87,10 @@ cd dns-mcp
 make build
 ```
 
-### 2. Connect (Claude Desktop)
+### 2. Connect
 
-Add to your `claude_desktop_config.json`:
+Any MCP client that supports stdio transport works. Claude Desktop is the
+primary tested client — add to your `claude_desktop_config.json`:
 
 ```json
 {
@@ -112,6 +113,10 @@ Config file location:
 - **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
 - **Linux**: `~/.config/Claude/claude_desktop_config.json`
 
+Other MCP clients (Cursor, VS Code with MCP extension, etc.) use the same
+`command` / `args` pattern — consult your client's documentation for the
+config file location and format.
+
 The `--dns 9.9.9.9` flag ensures DNSSEC-correct resolution regardless of the
 host's DNS configuration.
 
@@ -132,14 +137,14 @@ email to analyze:
 - **`dnssec_chain_audit`** → *"Audit dnssec.works"*
 - **`soc_email_forensics`** → *(attach or paste a raw .eml)*
 
-Without a prompt, you can also ask ad-hoc questions — Claude will call
-individual tools as needed. The prompts simply give it a consistent analyst
-workflow and a structured report format.
+Without a prompt, you can also ask ad-hoc questions — your assistant will
+call individual tools as needed. The prompts simply give it a consistent
+analyst workflow and a structured report format.
 
 ## Architecture
 
 ```
-Claude Desktop
+MCP Client (e.g. Claude Desktop)
   |
   | (spawns per-session)
   v
@@ -153,7 +158,7 @@ FastMCP server (server.py)
   |  - requests for RDAP only
 ```
 
-No network ports. No auth tokens. No proxy. Claude Desktop manages the
+No network ports. No auth tokens. No proxy. The MCP client manages the
 container lifecycle — one container per session, cleaned up on exit.
 
 ## Day-to-Day
