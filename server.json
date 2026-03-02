@@ -1,0 +1,16 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.mclose/dns-mcp",
+  "title": "DNS MCP Server",
+  "description": "Real-time DNS security analysis — DNSSEC validation, email auth (SPF/DKIM/DMARC/DANE/BIMI), and RDAP. Built for SOC investigation workflows.",
+  "version": "1.0.0",
+  "packages": [
+    {
+      "registryType": "oci",
+      "identifier": "docker.io/mclose/dns-mcp:1.0.0",
+      "transport": {
+        "type": "stdio"
+      }
+    }
+  ]
+}
