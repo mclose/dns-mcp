@@ -1,4 +1,5 @@
 FROM python:3.12-alpine3.21
+LABEL io.modelcontextprotocol.server.name="io.github.mclose/dns-mcp"
 
 # System packages for DNS operations
 RUN apk add --no-cache \
