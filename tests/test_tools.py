@@ -33,6 +33,9 @@ from server import (
     rdap_lookup,
     check_dane,
     detect_hijacking,
+    email_security_audit,
+    dnssec_chain_audit,
+    soc_email_forensics,
 )
 
 
@@ -1162,3 +1165,49 @@ class TestDetectHijacking:
         """9.9.9.9 (Quad9) should set the AD flag for cloudflare.com (validates DNSSEC)"""
         result = detect_hijacking(resolver="9.9.9.9")
         assert result["checks"]["dnssec_validation"]["ad_flag"] is True
+
+
+# ---------------------------------------------------------------------------
+# Analyst prompts
+# ---------------------------------------------------------------------------
+
+
+class TestPrompts:
+    def test_email_security_audit_returns_string(self):
+        """email_security_audit() returns a non-empty string"""
+        result = email_security_audit()
+        assert isinstance(result, str)
+        assert len(result) > 0
+
+    def test_email_security_audit_content(self):
+        """email_security_audit() content identifies it as the correct prompt"""
+        result = email_security_audit()
+        assert "email security auditor" in result
+        assert "DMARC" in result
+        assert "DKIM" in result
+
+    def test_dnssec_chain_audit_returns_string(self):
+        """dnssec_chain_audit() returns a non-empty string"""
+        result = dnssec_chain_audit()
+        assert isinstance(result, str)
+        assert len(result) > 0
+
+    def test_dnssec_chain_audit_content(self):
+        """dnssec_chain_audit() content identifies it as the correct prompt"""
+        result = dnssec_chain_audit()
+        assert "chain-of-trust" in result
+        assert "dns_dnssec_validate" in result
+        assert "nsec_info" in result
+
+    def test_soc_email_forensics_returns_string(self):
+        """soc_email_forensics() returns a non-empty string"""
+        result = soc_email_forensics()
+        assert isinstance(result, str)
+        assert len(result) > 0
+
+    def test_soc_email_forensics_content(self):
+        """soc_email_forensics() content identifies it as the correct prompt"""
+        result = soc_email_forensics()
+        assert "phishing" in result.lower()
+        assert "DKIM" in result
+        assert "TRUSTABLE" in result

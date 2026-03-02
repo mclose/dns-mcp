@@ -17,8 +17,9 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir --break-system-packages -r requirements.txt
 
-# Copy application code and tests
+# Copy application code, prompts, and tests
 COPY server.py ./
+COPY prompts/ prompts/
 COPY tests/ tests/
 
 RUN chown -R claude:claude /app

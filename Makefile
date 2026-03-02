@@ -1,7 +1,10 @@
-.PHONY: build test shell
+.PHONY: build rebuild test shell
 
 build:
 	docker compose build
+
+rebuild:
+	docker compose build --no-cache
 
 test:
 	docker compose run --rm dns-mcp pytest tests/ -v

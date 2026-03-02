@@ -31,6 +31,7 @@ Tools provided:
 """
 
 from fastmcp import FastMCP
+from pathlib import Path
 import dns.resolver
 import dns.query
 import dns.message
@@ -53,6 +54,9 @@ from pydantic import Field
 
 # Initialize FastMCP server
 mcp = FastMCP("DNS Query Server")
+
+# Prompt files directory
+_PROMPT_DIR = Path(__file__).parent / "prompts"
 
 # Domain validation regex (strict)
 DOMAIN_PATTERN = re.compile(
@@ -2324,6 +2328,29 @@ def _print_startup_banner(transport: str):
     )
 
     print(banner, file=sys.stderr)
+
+
+# ---------------------------------------------------------------------------
+# Analyst prompts
+# ---------------------------------------------------------------------------
+
+
+@mcp.prompt()
+def email_security_audit() -> str:
+    """Audit the email security posture of a domain (SPF, DKIM, DMARC, MTA-STS, BIMI). Grades A–F."""
+    return (_PROMPT_DIR / "email_security_audit.txt").read_text()
+
+
+@mcp.prompt()
+def dnssec_chain_audit() -> str:
+    """Full DNSSEC chain-of-trust audit from the IANA root trust anchor down to a target domain."""
+    return (_PROMPT_DIR / "dnssec_chain_audit.txt").read_text()
+
+
+@mcp.prompt()
+def soc_email_forensics() -> str:
+    """Forensic phishing analysis of a raw email (.eml or pasted headers). Returns TRUSTABLE / SUSPICIOUS / PHISHING / FURTHER ANALYSIS REQUIRED."""
+    return (_PROMPT_DIR / "soc_email_forensics.txt").read_text()
 
 
 if __name__ == "__main__":

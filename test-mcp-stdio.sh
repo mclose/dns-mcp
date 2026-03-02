@@ -140,7 +140,7 @@ sleep 0.5
 
 # ── Test 2: List tools ───────────────────────────────────────
 
-echo -e "${YELLOW}[2] List Tools (expect 16)${NC}"
+echo -e "${YELLOW}[2] List Tools (expect 17)${NC}"
 LIST_BODY='{"jsonrpc":"2.0","id":2,"method":"tools/list"}'
 echo "$LIST_BODY" | jq .
 echo "$LIST_BODY" >&3
@@ -225,6 +225,50 @@ call_tool 19 "quine - server source introspection" \
 
 call_tool 20 "check_dane - bund.de (known DANE deployer)" \
     '{"jsonrpc":"2.0","id":20,"method":"tools/call","params":{"name":"check_dane","arguments":{"domain":"bund.de"}}}'
+
+# ── Analyst Prompts ───────────────────────────────────────────
+
+echo -e "${YELLOW}[21] List Prompts (expect 3)${NC}"
+PROMPTS_LIST_BODY='{"jsonrpc":"2.0","id":21,"method":"prompts/list"}'
+echo "$PROMPTS_LIST_BODY" | jq .
+echo "$PROMPTS_LIST_BODY" >&3
+if read -t 10 -r PROMPTS_LIST_RESPONSE <&4; then
+    PROMPT_NAMES=$(echo "$PROMPTS_LIST_RESPONSE" | jq -r '.result.prompts[].name' 2>/dev/null)
+    PROMPT_COUNT=$(echo "$PROMPT_NAMES" | grep -c . || true)
+    echo -e "  Prompts found: ${PROMPT_COUNT}"
+    echo "$PROMPT_NAMES" | while read -r name; do echo "    - $name"; done
+    if [ "$PROMPT_COUNT" -ge 3 ]; then
+        PASS=$((PASS + 1))
+    else
+        echo -e "${RED}  EXPECTED 3 prompts, got ${PROMPT_COUNT}${NC}"
+        FAIL=$((FAIL + 1))
+    fi
+else
+    echo -e "${RED}  FAILED - no response (10s timeout)${NC}"
+    FAIL=$((FAIL + 1))
+fi
+echo ""
+
+echo -e "${YELLOW}[22] Get Prompt - email_security_audit${NC}"
+PROMPT_GET_BODY='{"jsonrpc":"2.0","id":22,"method":"prompts/get","params":{"name":"email_security_audit"}}'
+echo "$PROMPT_GET_BODY" | jq .
+echo "$PROMPT_GET_BODY" >&3
+if read -t 10 -r PROMPT_GET_RESPONSE <&4; then
+    PROMPT_TEXT=$(echo "$PROMPT_GET_RESPONSE" | jq -r '.result.messages[0].content.text // empty' 2>/dev/null)
+    if echo "$PROMPT_TEXT" | grep -q "email security auditor"; then
+        echo -e "  Content verified (contains 'email security auditor')"
+        echo "$PROMPT_GET_RESPONSE" | jq '{id: .id, messages_count: (.result.messages | length)}'
+        PASS=$((PASS + 1))
+    else
+        echo -e "${RED}  FAILED - prompt content missing expected text${NC}"
+        echo "$PROMPT_GET_RESPONSE" | jq .
+        FAIL=$((FAIL + 1))
+    fi
+else
+    echo -e "${RED}  FAILED - no response (10s timeout)${NC}"
+    FAIL=$((FAIL + 1))
+fi
+echo ""
 
 # ── Summary ──────────────────────────────────────────────────
 

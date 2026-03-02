@@ -40,6 +40,22 @@ through Claude in real time.
 | `ping` | Health check — returns pong with timestamp |
 | `quine` | Returns the source code of this server |
 
+## Analyst Prompts
+
+The server ships with three analyst prompt templates. Any MCP-compatible client
+can list and invoke them — no Claude-specific configuration required.
+
+| Prompt | What it does |
+|--------|-------------|
+| `email_security_audit` | Domain email security audit: SPF, DKIM, DMARC, MTA-STS, BIMI — graded A through F with prioritized recommendations |
+| `dnssec_chain_audit` | Full DNSSEC chain-of-trust audit from the IANA root trust anchor down to the target domain |
+| `soc_email_forensics` | Forensic phishing analysis of a raw email (.eml or pasted headers) — returns TRUSTABLE / SUSPICIOUS / PHISHING / FURTHER ANALYSIS REQUIRED |
+
+Prompts set the analyst context and tool-use strategy for the session. Select
+one from your MCP client's prompt picker, then provide the domain or email to
+analyze. The LLM will run the appropriate tools in sequence and synthesize a
+structured report.
+
 ## Example
 
 Ask Claude: *"Check the email security posture of deflationhollow.net"*
@@ -106,6 +122,20 @@ make test                  # unit tests inside container
 ./test-mcp-stdio.sh        # end-to-end stdio test
 ```
 
+### 4. Start an analysis
+
+In Claude Desktop (or any MCP client that supports prompts), open the prompt
+picker and select one of the three analyst prompts. Then provide a domain or
+email to analyze:
+
+- **`email_security_audit`** → *"Check deflationhollow.net"*
+- **`dnssec_chain_audit`** → *"Audit dnssec.works"*
+- **`soc_email_forensics`** → *(attach or paste a raw .eml)*
+
+Without a prompt, you can also ask ad-hoc questions — Claude will call
+individual tools as needed. The prompts simply give it a consistent analyst
+workflow and a structured report format.
+
 ## Architecture
 
 ```
@@ -130,7 +160,8 @@ container lifecycle — one container per session, cleaned up on exit.
 
 | Command | What it does |
 |---------|-------------|
-| `make build` | Build the Docker image |
+| `make build` | Build the Docker image (uses layer cache) |
+| `make rebuild` | Full clean build, no cache — use when something feels off |
 | `make test` | Run unit tests inside the container |
 | `make shell` | Interactive shell inside the container |
 | `./test-mcp-stdio.sh` | End-to-end stdio protocol test |
