@@ -307,7 +307,7 @@ def dns_query(
         return {
             "domain": domain,
             "record_type": record_type,
-            "nameserver": nameserver or "system default",
+            "nameserver": nameserver or resolver.nameservers[0],
             "ttl": answers.rrset.ttl,
             "results": results,
             "query_time": datetime.now(timezone.utc).isoformat(),
