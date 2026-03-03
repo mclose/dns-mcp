@@ -3,11 +3,11 @@
   "name": "io.github.mclose/dns-mcp",
   "title": "DNS MCP Server",
   "description": "Real-time DNS security analysis — DNSSEC, email auth, and RDAP. Built for SOC investigations.",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "packages": [
     {
       "registryType": "oci",
-      "identifier": "docker.io/mclose/dns-mcp:1.0.0",
+      "identifier": "docker.io/mclose/dns-mcp:1.1.0",
       "transport": {
         "type": "stdio"
       }
