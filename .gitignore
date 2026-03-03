@@ -40,6 +40,12 @@ logs/
 .coverage
 htmlcov/
 
+# Tool output artifacts
+tools/posture-*.json
+
+# Shared files for Claude (screenshots, etc.)
+share2claude/
+
 # MCP registry
 .mcpregistry_github_token
 .mcpregistry_registry_token
