@@ -51,6 +51,17 @@ Working backlog. Items are roughly priority-ordered within each section.
 
 ---
 
+## Refactors
+
+- [ ] **`quine` — outline mode default** — at ~2500 lines, dumping the full source
+  into an LLM context is expensive and rarely what's wanted. Refactor to return a
+  structured outline by default; require `full=True` to get the raw source.
+  Default response should include: all tool names with line ranges, helper
+  functions, prompt names, total line count, file path. Full source still
+  available for genuine introspection use cases but opt-in.
+
+---
+
 ## Prompt improvements
 
 - [ ] **`soc_email_forensics` prompt** — currently untested against real phishing
