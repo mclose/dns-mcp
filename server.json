@@ -3,6 +3,10 @@
   "name": "io.github.mclose/dns-mcp",
   "title": "DNS MCP Server",
   "description": "Real-time DNS security analysis — DNSSEC, email auth, and RDAP. Built for SOC investigations.",
+  "repository": {
+    "url": "https://github.com/mclose/dns-mcp",
+    "source": "github"
+  },
   "version": "1.1.0",
   "packages": [
     {
