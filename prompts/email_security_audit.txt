@@ -22,7 +22,14 @@ found, attempt a DNS zone transfer (AXFR) against the domain's authoritative
 nameserver to enumerate _domainkey records directly. Use dns_dig_style with
 record_type AXFR if available, otherwise note the limitation.
 
-Step 4 — Assign a grade. If the provider uses opaque selectors and no selector
+Step 4 — If the user supplies known DKIM selectors (e.g. from their provider's
+dashboard), probe those FIRST before the standard list. These are typically
+opaque selectors like fe-888d2fe8b9 (Forward Email) or UUID-based selectors
+(Amazon SES) that cannot be guessed. If any provider-supplied selector resolves
+to a valid DKIM public key, mark DKIM status as "verified" and reassess the
+grade accordingly — the opaque-provider cap no longer applies.
+
+Step 5 — Assign a grade. If the provider uses opaque selectors and no selector
 was found via probing or AXFR, report DKIM as "unverified" rather than "absent"
 and cap the grade at B (cannot confirm A without verified DKIM):
 
@@ -50,4 +57,6 @@ Then produce these sections in order:
 - BIMI: whether a record exists and the raw record if present
 - MTA-STS: whether it is configured and the policy mode
 
-Close with a prioritized list of critical issues and recommendations.
+Close with a prioritized list of critical issues and recommendations. If DKIM
+status is "unverified" due to opaque selectors, tell the user they can re-run
+the audit with their provider-supplied selector names for a reassessed grade.
