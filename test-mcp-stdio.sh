@@ -140,7 +140,7 @@ sleep 0.5
 
 # ── Test 2: List tools ───────────────────────────────────────
 
-echo -e "${YELLOW}[2] List Tools (expect 17)${NC}"
+echo -e "${YELLOW}[2] List Tools (expect 18)${NC}"
 LIST_BODY='{"jsonrpc":"2.0","id":2,"method":"tools/list"}'
 echo "$LIST_BODY" | jq .
 echo "$LIST_BODY" >&3
@@ -152,10 +152,10 @@ if read -t 10 -r LIST_RESPONSE <&4; then
     echo -e "  Tools found: ${TOOL_COUNT}"
     echo "$TOOL_NAMES" | while read -r name; do echo "    - $name"; done
 
-    if [ "$TOOL_COUNT" -ge 16 ]; then
+    if [ "$TOOL_COUNT" -ge 18 ]; then
         PASS=$((PASS + 1))
     else
-        echo -e "${RED}  EXPECTED 16 tools, got ${TOOL_COUNT}${NC}"
+        echo -e "${RED}  EXPECTED 18 tools, got ${TOOL_COUNT}${NC}"
         FAIL=$((FAIL + 1))
     fi
 else
@@ -169,67 +169,70 @@ echo ""
 call_tool 3 "ping (health check)" \
     '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"ping","arguments":{}}}'
 
+call_tool 4 "server_info (resolver config)" \
+    '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"server_info","arguments":{}}}'
+
 # ── DNS Tools ────────────────────────────────────────────────
 
-call_tool 4 "dns_query - google.com A record" \
-    '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"dns_query","arguments":{"domain":"google.com"}}}'
+call_tool 5 "dns_query - google.com A record" \
+    '{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"dns_query","arguments":{"domain":"google.com"}}}'
 
-call_tool 5 "dns_dig_style - google.com (DNSSEC flags)" \
-    '{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"dns_dig_style","arguments":{"domain":"google.com","nameserver":"9.9.9.9"}}}'
+call_tool 6 "dns_dig_style - google.com (DNSSEC flags)" \
+    '{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"dns_dig_style","arguments":{"domain":"google.com","nameserver":"9.9.9.9"}}}'
 
-call_tool 6 "dns_query - lab.deflationhollow.net A record" \
-    '{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"dns_query","arguments":{"domain":"lab.deflationhollow.net"}}}'
+call_tool 7 "dns_query - lab.deflationhollow.net A record" \
+    '{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"dns_query","arguments":{"domain":"lab.deflationhollow.net"}}}'
 
-call_tool 7 "dns_dig_style - lab.deflationhollow.net (DNSSEC)" \
-    '{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"dns_dig_style","arguments":{"domain":"lab.deflationhollow.net","nameserver":"9.9.9.9"}}}'
+call_tool 8 "dns_dig_style - lab.deflationhollow.net (DNSSEC)" \
+    '{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"dns_dig_style","arguments":{"domain":"lab.deflationhollow.net","nameserver":"9.9.9.9"}}}'
 
-call_tool 8 "reverse_dns - 9.9.9.9" \
-    '{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"reverse_dns","arguments":{"ip_address":"9.9.9.9"}}}'
+call_tool 9 "reverse_dns - 9.9.9.9" \
+    '{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"reverse_dns","arguments":{"ip_address":"9.9.9.9"}}}'
 
-call_tool 9 "dns_dnssec_validate - claude.lab.deflationhollow.net (chain of trust)" \
-    '{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"dns_dnssec_validate","arguments":{"domain":"claude.lab.deflationhollow.net","record_type":"A","nameserver":"9.9.9.9"}}}'
+call_tool 10 "dns_dnssec_validate - claude.lab.deflationhollow.net (chain of trust)" \
+    '{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"dns_dnssec_validate","arguments":{"domain":"claude.lab.deflationhollow.net","record_type":"A","nameserver":"9.9.9.9"}}}'
 
-call_tool 10 "nsec_info - cloudflare.com (NSEC/NSEC3 analysis)" \
-    '{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"nsec_info","arguments":{"domain":"cloudflare.com"}}}'
+call_tool 11 "nsec_info - cloudflare.com (NSEC/NSEC3 analysis)" \
+    '{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"nsec_info","arguments":{"domain":"cloudflare.com"}}}'
 
-call_tool 11 "timestamp_converter - epoch to ISO" \
-    '{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"timestamp_converter","arguments":{"timestamp":1705314600,"convert_to":"iso"}}}'
+call_tool 12 "timestamp_converter - epoch to ISO" \
+    '{"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"timestamp_converter","arguments":{"timestamp":1705314600,"convert_to":"iso"}}}'
 
 # ── Email Security Tools ─────────────────────────────────────
 
-call_tool 12 "check_spf - google.com" \
-    '{"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"check_spf","arguments":{"domain":"google.com"}}}'
+call_tool 13 "check_spf - google.com" \
+    '{"jsonrpc":"2.0","id":13,"method":"tools/call","params":{"name":"check_spf","arguments":{"domain":"google.com"}}}'
 
-call_tool 13 "check_dmarc - google.com" \
-    '{"jsonrpc":"2.0","id":13,"method":"tools/call","params":{"name":"check_dmarc","arguments":{"domain":"google.com"}}}'
+call_tool 14 "check_dmarc - google.com" \
+    '{"jsonrpc":"2.0","id":14,"method":"tools/call","params":{"name":"check_dmarc","arguments":{"domain":"google.com"}}}'
 
-call_tool 14 "check_dkim_selector - google (20230601._domainkey.gmail.com)" \
-    '{"jsonrpc":"2.0","id":14,"method":"tools/call","params":{"name":"check_dkim_selector","arguments":{"selector":"20230601","domain":"gmail.com"}}}'
+call_tool 15 "check_dkim_selector - google (20230601._domainkey.gmail.com)" \
+    '{"jsonrpc":"2.0","id":15,"method":"tools/call","params":{"name":"check_dkim_selector","arguments":{"selector":"20230601","domain":"gmail.com"}}}'
 
-call_tool 15 "check_bimi - cnn.com (known BIMI adopter)" \
-    '{"jsonrpc":"2.0","id":15,"method":"tools/call","params":{"name":"check_bimi","arguments":{"domain":"cnn.com"}}}'
+call_tool 16 "check_bimi - cnn.com (known BIMI adopter)" \
+    '{"jsonrpc":"2.0","id":16,"method":"tools/call","params":{"name":"check_bimi","arguments":{"domain":"cnn.com"}}}'
 
-call_tool 16 "check_mta_sts - google.com" \
-    '{"jsonrpc":"2.0","id":16,"method":"tools/call","params":{"name":"check_mta_sts","arguments":{"domain":"google.com"}}}'
+call_tool 17 "check_mta_sts - google.com" \
+    '{"jsonrpc":"2.0","id":17,"method":"tools/call","params":{"name":"check_mta_sts","arguments":{"domain":"google.com"}}}'
 
-call_tool 17 "check_smtp_tlsrpt - google.com" \
-    '{"jsonrpc":"2.0","id":17,"method":"tools/call","params":{"name":"check_smtp_tlsrpt","arguments":{"domain":"google.com"}}}'
+call_tool 18 "check_smtp_tlsrpt - google.com" \
+    '{"jsonrpc":"2.0","id":18,"method":"tools/call","params":{"name":"check_smtp_tlsrpt","arguments":{"domain":"google.com"}}}'
 
-call_tool 18 "rdap_lookup - google.com (domain registration)" \
-    '{"jsonrpc":"2.0","id":18,"method":"tools/call","params":{"name":"rdap_lookup","arguments":{"domain":"google.com"}}}'
+call_tool 19 "rdap_lookup - google.com (domain registration)" \
+    '{"jsonrpc":"2.0","id":19,"method":"tools/call","params":{"name":"rdap_lookup","arguments":{"domain":"google.com"}}}'
 
 # ── Utility Tools ────────────────────────────────────────────
 
-call_tool 19 "quine - server source introspection" \
-    '{"jsonrpc":"2.0","id":19,"method":"tools/call","params":{"name":"quine","arguments":{}}}'
+call_tool 20 "quine - server source introspection" \
+    '{"jsonrpc":"2.0","id":20,"method":"tools/call","params":{"name":"quine","arguments":{}}}'
 
-call_tool 20 "check_dane - bund.de (known DANE deployer)" \
-    '{"jsonrpc":"2.0","id":20,"method":"tools/call","params":{"name":"check_dane","arguments":{"domain":"bund.de"}}}'
+call_tool 21 "check_dane - bund.de (known DANE deployer)" \
+    '{"jsonrpc":"2.0","id":21,"method":"tools/call","params":{"name":"check_dane","arguments":{"domain":"bund.de"}}}'
 
 # ── Analyst Prompts ───────────────────────────────────────────
 
-echo -e "${YELLOW}[21] List Prompts (expect 3)${NC}"
-PROMPTS_LIST_BODY='{"jsonrpc":"2.0","id":21,"method":"prompts/list"}'
+echo -e "${YELLOW}[22] List Prompts (expect 3)${NC}"
+PROMPTS_LIST_BODY='{"jsonrpc":"2.0","id":22,"method":"prompts/list"}'
 echo "$PROMPTS_LIST_BODY" | jq .
 echo "$PROMPTS_LIST_BODY" >&3
 if read -t 10 -r PROMPTS_LIST_RESPONSE <&4; then
@@ -249,8 +252,8 @@ else
 fi
 echo ""
 
-echo -e "${YELLOW}[22] Get Prompt - email_security_audit${NC}"
-PROMPT_GET_BODY='{"jsonrpc":"2.0","id":22,"method":"prompts/get","params":{"name":"email_security_audit"}}'
+echo -e "${YELLOW}[23] Get Prompt - email_security_audit${NC}"
+PROMPT_GET_BODY='{"jsonrpc":"2.0","id":23,"method":"prompts/get","params":{"name":"email_security_audit"}}'
 echo "$PROMPT_GET_BODY" | jq .
 echo "$PROMPT_GET_BODY" >&3
 if read -t 10 -r PROMPT_GET_RESPONSE <&4; then

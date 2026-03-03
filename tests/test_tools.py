@@ -20,6 +20,7 @@ from server import (
     dns_dnssec_validate,
     nsec_info,
     quine,
+    server_info,
     validate_domain,
     validate_selector,
     _parse_tag_value,
@@ -1092,6 +1093,41 @@ class TestQuine:
         assert "lines" in result
         assert result["lines"] > 0
         assert result["file"].endswith("server.py")
+
+
+# ---------------------------------------------------------------------------
+# server_info
+# ---------------------------------------------------------------------------
+
+
+class TestServerInfo:
+    def test_returns_dnspython_version(self):
+        """server_info() should return a non-empty dnspython version string"""
+        result = server_info()
+        assert "dnspython_version" in result
+        assert isinstance(result["dnspython_version"], str)
+        assert len(result["dnspython_version"]) > 0
+
+    def test_returns_nameservers(self):
+        """server_info() should return a list of nameservers"""
+        result = server_info()
+        assert "nameservers" in result
+        assert isinstance(result["nameservers"], list)
+        assert len(result["nameservers"]) > 0
+
+    def test_response_structure(self):
+        """Verify all expected keys are present"""
+        result = server_info()
+        for key in [
+            "dnspython_version",
+            "nameservers",
+            "search",
+            "domain",
+            "timeout",
+            "edns",
+            "edns_payload",
+        ]:
+            assert key in result, f"Missing key: {key}"
 
 
 # ---------------------------------------------------------------------------

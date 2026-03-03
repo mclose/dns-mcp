@@ -8,6 +8,7 @@ All DNS operations are performed using pure Python with no subprocess calls.
 Tools provided:
   Utility:
   - ping: Lightweight health check (no external dependencies)
+  - server_info: Show resolver config (nameservers, dnspython version, etc.)
   - quine: Return the source code of this MCP server
 
   DNS:
@@ -33,6 +34,7 @@ Tools provided:
 from fastmcp import FastMCP
 from pathlib import Path
 import dns.resolver
+import dns.version
 import dns.query
 import dns.message
 import dns.flags
@@ -186,6 +188,25 @@ def ping() -> dict:
         "status": "ok",
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "server": "DNS Query Server",
+    }
+
+
+@mcp.tool()
+def server_info() -> dict:
+    """
+    Show server configuration: dnspython version, configured nameservers,
+    search domains, and default domain. Useful for understanding which
+    resolver the server is using and debugging query behavior.
+    """
+    resolver = dns.resolver.Resolver()
+    return {
+        "dnspython_version": dns.version.version,
+        "nameservers": resolver.nameservers,
+        "search": [str(s) for s in resolver.search],
+        "domain": str(resolver.domain),
+        "timeout": resolver.lifetime,
+        "edns": resolver.edns,
+        "edns_payload": resolver.payload,
     }
 
 
