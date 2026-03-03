@@ -5,7 +5,55 @@
 # Output JSON is written to the directory you called this script from.
 set -euo pipefail
 
-DOMAIN="${1:-deflationhollow.net}"
+# ── Parse flags ───────────────────────────────────────────────────────────────
+AUTO_APPROVE=false
+DKIM_SELECTORS=()
+POSITIONAL=()
+SKIP_NEXT=false
+for i in $(seq 1 $#); do
+  if [ "$SKIP_NEXT" = true ]; then
+    SKIP_NEXT=false
+    continue
+  fi
+  arg="${!i}"
+  case "$arg" in
+    -y|--yes) AUTO_APPROVE=true ;;
+    -k|--dkim-selector)
+      next_i=$((i + 1))
+      next_val="${!next_i:-}"
+      if [ -z "$next_val" ]; then
+        echo "ERROR: --dkim-selector requires a value" >&2
+        exit 1
+      fi
+      # Split on commas to support -k sel1,sel2
+      IFS=',' read -ra sels <<< "$next_val"
+      DKIM_SELECTORS+=("${sels[@]}")
+      SKIP_NEXT=true
+      ;;
+    -h|--help)
+      echo "Usage: $(basename "$0") [options] [domain]"
+      echo ""
+      echo "Runs Claude Code with a system prompt that audits the email security"
+      echo "posture of a domain via DNS lookups (SPF, DKIM, DMARC, MTA-STS, BIMI)."
+      echo "Output is a structured JSON report written to the current directory."
+      echo ""
+      echo "Options:"
+      echo "  -y, --yes                  Auto-approve dns-mcp tool permissions (skip prompt)"
+      echo "  -k, --dkim-selector SEL    Add a known DKIM selector from your provider's"
+      echo "                             dashboard. Use multiple times or comma-separate."
+      echo "  -h, --help                 Show this help"
+      echo ""
+      echo "Examples:"
+      echo "  $(basename "$0") example.com"
+      echo "  $(basename "$0") -y example.com"
+      echo "  $(basename "$0") -k fe-abc123 -k fe-def456 example.com"
+      echo "  $(basename "$0") -k fe-abc123,fe-def456 example.com"
+      exit 0
+      ;;
+    *)        POSITIONAL+=("$arg") ;;
+  esac
+done
+DOMAIN="${POSITIONAL[0]:-deflationhollow.net}"
 TIMESTAMP=$(date -u +%Y%m%dT%H%M%SZ)
 ORIG_DIR="$(pwd)"
 OUTPUT_FILE="${ORIG_DIR}/posture-${DOMAIN}-${TIMESTAMP}.json"
@@ -114,8 +162,101 @@ Grading rubric:
   F  = No SPF, no DMARC, no DKIM
 EOF
 
-# ── 4. Run ─────────────────────────────────────────────────────────────────────
+# Append provider-specific selectors if supplied via --dkim-selector
+if [ ${#DKIM_SELECTORS[@]} -gt 0 ]; then
+  {
+    echo ""
+    echo "IMPORTANT — The operator has provided known DKIM selectors from their"
+    echo "provider dashboard. Probe these FIRST, before the standard list above."
+    echo "If any of these resolve, mark dkim.status as \"verified\"."
+    echo ""
+    echo "Provider-supplied selectors:"
+    for sel in "${DKIM_SELECTORS[@]}"; do
+      echo "  - $sel"
+    done
+  } >> "$WORK_DIR/system-prompt.txt"
+fi
+
+# ── 4. Permissions prompt ─────────────────────────────────────────────────────
+
+# list_mcp_tools — spins up a throwaway container, queries tools/list via MCP
+list_mcp_tools() {
+  local fifo_dir
+  fifo_dir=$(mktemp -d)
+  mkfifo "$fifo_dir/in" "$fifo_dir/out"
+
+  docker run --rm -i dns-mcp python server.py --stdio \
+    < "$fifo_dir/in" > "$fifo_dir/out" 2>/dev/null &
+  local pid=$!
+
+  exec 5>"$fifo_dir/in" 6<"$fifo_dir/out"
+  sleep 1
+
+  # Initialize handshake
+  echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"tool-lister","version":"1.0.0"}}}' >&5
+  read -t 5 -r _ <&6 || true
+  echo '{"jsonrpc":"2.0","method":"notifications/initialized"}' >&5
+  sleep 0.3
+
+  # Request tool list
+  echo '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' >&5
+  local response
+  if read -t 5 -r response <&6; then
+    echo "$response" | python3 -c "
+import sys, json
+data = json.load(sys.stdin)
+tools = data.get('result', {}).get('tools', [])
+for t in tools:
+    desc = t.get('description', '').split('.')[0]
+    print(f\"    {t['name']:30s} {desc}\")
+" 2>/dev/null
+  else
+    echo "    (could not retrieve tool list)"
+  fi
+
+  # Cleanup
+  exec 5>&- 2>/dev/null || true
+  exec 6<&- 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+  rm -rf "$fifo_dir" 2>/dev/null || true
+}
+
+ALLOWED_TOOLS_FLAG=()
+if [ "$AUTO_APPROVE" = true ]; then
+  echo "── Auto-approving dns-mcp tool permissions (--yes)"
+  ALLOWED_TOOLS_FLAG=(--allowedTools "mcp__dns-mcp__*")
+else
+  while true; do
+    echo ""
+    echo "This script uses MCP tools from the dns-mcp server."
+    echo "These are read-only DNS lookups (dig, whois, etc.) with no side effects."
+    echo ""
+    read -r -p "Allow all dns-mcp tools for this run? [y/N/l to list] " response
+    case "$response" in
+      [lL])
+        echo ""
+        echo "  Tools provided by dns-mcp:"
+        list_mcp_tools
+        ;;
+      [yY]|[yY][eE][sS])
+        ALLOWED_TOOLS_FLAG=(--allowedTools "mcp__dns-mcp__*")
+        break
+        ;;
+      *)
+        echo "Proceeding without pre-approved permissions."
+        echo "Claude will prompt for each tool individually."
+        break
+        ;;
+    esac
+  done
+fi
+
+# ── 5. Run ─────────────────────────────────────────────────────────────────────
+echo ""
 echo "── Domain:  $DOMAIN"
+if [ ${#DKIM_SELECTORS[@]} -gt 0 ]; then
+  echo "── DKIM:    ${DKIM_SELECTORS[*]}"
+fi
 echo "── Output:  $OUTPUT_FILE"
 echo ""
 
@@ -126,8 +267,19 @@ claude \
   --system-prompt-file "$WORK_DIR/system-prompt.txt" \
   --output-format text \
   --max-turns 15 \
-| tee "$OUTPUT_FILE" \
-| python3 -m json.tool --indent 2
+  "${ALLOWED_TOOLS_FLAG[@]}" \
+  > "$WORK_DIR/raw-output.txt"
+
+# Extract the JSON object — Claude sometimes emits prose before/after it
+python3 -c "
+import sys, json
+text = open(sys.argv[1]).read()
+start = text.index('{')
+end = text.rindex('}') + 1
+obj = json.loads(text[start:end])
+json.dump(obj, open(sys.argv[2], 'w'))
+json.dump(obj, sys.stdout, indent=2)
+" "$WORK_DIR/raw-output.txt" "$OUTPUT_FILE"
 
 echo ""
 echo "── Done: $OUTPUT_FILE"
