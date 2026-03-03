@@ -9,22 +9,44 @@ See `README.md` for usage. This file is for working in the codebase.
 
 | File | Purpose |
 |------|---------|
-| `server.py` | All tools, helpers, and prompts — the whole server |
+| `server.py` | All tools, helpers, and prompts — the whole server (~2400 lines) |
 | `tests/test_tools.py` | pytest unit tests (call tool functions directly) |
 | `test-mcp-stdio.sh` | End-to-end MCP protocol test over stdin/stdout |
 | `Makefile` | `make build` / `make test` / `make shell` |
 | `prompts/` | MCP analyst prompt text files |
 
+## Build & test
+
+```bash
+make build          # rebuild Docker image (required after any code change)
+make test           # pytest in container (167 tests)
+./test-mcp-stdio.sh # end-to-end MCP protocol test (25 tests)
+make shell          # interactive shell inside the container
+```
+
+**Always run `make build` before `make test` or `./test-mcp-stdio.sh`** — tests
+run inside the container, so a stale image means stale code under test.
+
+## Allowed commands
+
+These are safe to run without confirmation:
+- `make build` — rebuild Docker image
+- `make test` — run pytest suite in container
+- `./test-mcp-stdio.sh` — stdio transport end-to-end tests
+- `git push` — push to origin (after user requests it)
+- `docker run --rm dns-mcp python -c "..."` — debug snippets in container
+
 ## Adding a new tool — checklist
 
 When you add a tool, update **all** of these or the tests and e2e will fail:
 
-1. `server.py` — implement the tool function with `@mcp.tool()`
+1. `server.py` — implement the tool with `@mcp.tool()`
 2. `server.py` — bump the tool count in the module docstring banner
 3. `tests/test_tools.py` — add the tool to the import list
 4. `tests/test_tools.py` — add a `TestCheckFoo` class
 5. `README.md` — add a row to the appropriate tools table; update count in Architecture section and file structure comment
-6. `test-mcp-stdio.sh` — increment the expected tool count; add a `call_tool` invocation
+6. `test-mcp-stdio.sh` — increment expected tool count; add a `call_tool` invocation (renumber subsequent tests)
+7. Run `make build && make test && ./test-mcp-stdio.sh` to verify
 
 ## Tool structure
 
@@ -55,6 +77,7 @@ Key conventions:
 - **`DEFAULT_RESOLVER`** — use the constant, never hardcode `"9.9.9.9"`
 - **No shell execution** — all DNS via dnspython, RDAP via `requests`, nothing else
 - **Nameserver validation** — if a caller-supplied nameserver is accepted, validate it with `ipaddress.ip_address()`
+- **TXT lookups** — use shared `_query_all_txt_records()` helper (returns list of strings)
 
 ## Testing conventions
 
@@ -68,12 +91,15 @@ Tests call tool functions directly — **not** via the MCP protocol. This means:
   # Right
   result = check_foo("example.com", nameserver="9.9.9.9")
   ```
-- Tests are defensive against live DNS changes — check structure and types, not exact record values
-- Live DNS tests that depend on DNSSEC must tolerate `dane_present_no_dnssec` as well as `dane_valid` (intercepting resolvers strip the AD flag)
+- Tests run against live DNS — they must tolerate intercepted/proxied networks
+- Use `detect_hijacking("9.9.9.9")["checks"]` → `transparent_proxy.passed` as
+  the signal to relax DNSSEC-dependent assertions (intercepting proxies strip
+  the AD flag, turning `dane_valid` into `dane_present_no_dnssec`)
+- Check structure and types rather than exact record values
 
 ## Coding standards
 
-- `ruff` runs on every commit (pre-commit hook) — it will auto-format; stage the result and commit again if it fires
+- `ruff` runs on every commit (pre-commit hook) — it will auto-format staged files; stage the result and commit again if it fires
 - Security-first: no `eval`, `exec`, `os.system`, or `shell=True`
 - Input validation via explicit allow-lists (`validate_domain` regex, `validate_selector` regex, `validate_port` range check)
 
