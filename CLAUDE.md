@@ -29,12 +29,17 @@ run inside the container, so a stale image means stale code under test.
 
 ## Allowed commands
 
-These are safe to run without confirmation:
-- `make build` — rebuild Docker image
-- `make test` — run pytest suite in container
-- `./test-mcp-stdio.sh` — stdio transport end-to-end tests
-- `git push` — push to origin (after user requests it)
+These run without confirmation (saved in `~/.claude/settings.json`):
+- `make build` / `make test` / `make shell` / `make rebuild`
+- `./test-mcp-stdio.sh`
+- `git add` / `git commit` / `git push` / `git pull` / `git status` / `git diff` / `git log` / `git stash`
 - `docker run --rm dns-mcp python -c "..."` — debug snippets in container
+- `gh release view/list`, `gh pr view/list/diff`, `gh issue view/list`, `gh run view/list`, `gh api`
+
+**Always confirm before running:**
+- `git tag` — creating a version tag
+- `gh release create` — publishing a GitHub release
+- Any `git push --force` or destructive git operation
 
 ## Adding a new tool — checklist
 
