@@ -94,33 +94,9 @@ make build
 
 ### 2. Connect
 
-Any MCP client that supports stdio transport works. Claude Desktop is the
-primary tested client — add to your `claude_desktop_config.json`:
-
-```json
-{
-  "mcpServers": {
-    "dns-mcp": {
-      "command": "docker",
-      "args": [
-        "run", "--rm", "-i",
-        "--dns", "9.9.9.9",
-        "dns-mcp",
-        "python", "server.py"
-      ]
-    }
-  }
-}
-```
-
-Config file location:
-- **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
-- **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
-- **Linux**: `~/.config/Claude/claude_desktop_config.json`
-
-Other MCP clients (Cursor, VS Code with MCP extension, etc.) use the same
-`command` / `args` pattern — consult your client's documentation for the
-config file location and format.
+Any MCP client that supports stdio transport works. The server config block
+is the same across all clients — see [Client Support](#client-support) for
+client-specific setup instructions and config file locations.
 
 The `--dns 9.9.9.9` flag ensures DNSSEC-correct resolution regardless of the
 host's DNS configuration.
@@ -134,22 +110,104 @@ make test                  # unit tests inside container
 
 ### 4. Start an analysis
 
-**Claude Code CLI** — invoke analyst prompts directly with slash commands:
+Once connected, just ask:
+
+> *"Check the email security posture of deflationhollow.net"*
+> *"Audit the DNSSEC chain for dnssec.works"*
+> *"Is this email headers trustworthy?"* (paste raw headers)
+
+Clients that support MCP prompts can also invoke the structured analyst
+workflows directly — see [Client Support](#client-support) for details.
+
+## Client Support
+
+All clients use the same server block. The `command` and `args` are identical
+everywhere — only the config file location and prompt invocation differ.
+
+```json
+{
+  "mcpServers": {
+    "dns-mcp": {
+      "command": "docker",
+      "args": ["run", "--rm", "-i", "--dns", "9.9.9.9", "dns-mcp", "python", "server.py"]
+    }
+  }
+}
+```
+
+### Claude Desktop
+
+**Prompts:** Not supported — Desktop exposes MCP tools only. Use ad-hoc questions.
+
+Config file:
+- **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
+- **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
+- **Linux**: `~/.config/Claude/claude_desktop_config.json`
+
+### Claude Code CLI
+
+**Prompts:** Full support via `/` slash commands.
+
+Add the server with one command (adds to local project config):
+
+```bash
+claude mcp add dns-mcp -- docker run --rm -i --dns 9.9.9.9 dns-mcp python server.py
+```
+
+Or add `--scope user` to make it available across all projects. Invoke prompts
+by typing `/` in the chat — the three analyst prompts appear as:
 
 ```
-/mcp__dns-mcp__email_security_audit   → "Check deflationhollow.net"
-/mcp__dns-mcp__dnssec_chain_audit     → "Audit dnssec.works"
-/mcp__dns-mcp__soc_email_forensics    → (paste raw .eml headers)
+/mcp__dns-mcp__email_security_audit
+/mcp__dns-mcp__dnssec_chain_audit
+/mcp__dns-mcp__soc_email_forensics
 ```
 
 Type `/mcp__dns-mcp__` and tab-complete to see all three.
 
-**Claude Desktop** — prompts are not exposed in the Desktop UI (Desktop
-surfaces MCP tools only, not prompts). Just ask ad-hoc — the tools are all
-available and the model will run the same workflow:
+### Gemini CLI
 
-> *"Check the email security posture of deflationhollow.net"*
-> *"Audit the DNSSEC chain for dnssec.works"*
+**Prompts:** Supported (Gemini CLI implements the full MCP spec).
+
+Add the server with one command:
+
+```bash
+gemini mcp add dns-mcp -- docker run --rm -i --dns 9.9.9.9 dns-mcp python server.py
+```
+
+Or add manually to `~/.gemini/settings.json` (user scope) or
+`.gemini/settings.json` (project scope) using the same JSON block above.
+
+### Cursor
+
+**Prompts:** Verify with your installed version — Cursor MCP support is active
+and evolving. Config location: consult [Cursor MCP docs](https://docs.cursor.com/context/model-context-protocol).
+
+Add the JSON block above to your Cursor MCP config file.
+
+### VS Code (GitHub Copilot / Continue / Cline)
+
+**Prompts:** Depends on the extension — check extension documentation.
+
+Config location varies by extension. The JSON block above is the standard
+stdio format; consult your extension's MCP setup guide for the exact file path.
+
+### Zed
+
+**Prompts:** Check current Zed release notes — MCP support is active.
+Config location: consult [Zed MCP docs](https://zed.dev/docs/assistant/model-context-protocol).
+
+### Windsurf
+
+**Prompts:** Check current Windsurf release notes.
+Config location: consult Windsurf MCP documentation.
+
+---
+
+> **Note on prompt support:** MCP prompts require explicit client-side UI
+> (a slash command picker or equivalent). Not all clients have implemented
+> this yet. When prompts aren't available, ask ad-hoc — the tools work the
+> same way and the model applies the same workflow.
 
 ## Architecture
 
