@@ -2087,7 +2087,7 @@ def detect_hijacking(
 
     WiFi routers and ISPs sometimes intercept DNS queries and return spoofed
     responses — captive portals, ad-injection landing pages, or NXDOMAIN
-    redirects. This tool sends four probes directly to the specified resolver
+    redirects. This tool sends five probes directly to the specified resolver
     and reports a clean/suspicious/hijacked verdict with per-check detail.
 
     Checks performed:
@@ -2095,6 +2095,8 @@ def detect_hijacking(
     2. Known stable record — a.root-servers.net A must return 198.41.0.4
     3. DNSSEC AD flag — cloudflare.com A; AD set means resolver validates DNSSEC
     4. Resolver identity — whoami.akamai.net TXT reveals the resolver's source IP
+    5. Transparent proxy — queries root server directly with RD=0; RA=1 means
+       a transparent DNS proxy is intercepting port 53 traffic
 
     Verdict logic:
     - hijacked: NXDOMAIN probe returned NOERROR+IPs, OR known record IP wrong
@@ -2240,6 +2242,52 @@ def detect_hijacking(
         errors.append(f"Resolver identity check error: {e}")
 
     # -------------------------------------------------------------------------
+    # Check 5: Transparent proxy detection
+    # -------------------------------------------------------------------------
+    proxy_check: dict = {
+        "target": "a.root-servers.net (198.41.0.4)",
+        "query": ". NS (RD=0)",
+        "expected_flags": "QR AA RA=0",
+        "got_flags": None,
+        "ra_flag": False,
+        "aa_flag": False,
+        "passed": False,
+        "note": "",
+    }
+    try:
+        query = dns.message.make_query(".", dns.rdatatype.NS)
+        query.flags &= ~dns.flags.RD
+        response = dns.query.udp(query, "198.41.0.4", timeout=5.0)
+        ra_set = bool(response.flags & dns.flags.RA)
+        aa_set = bool(response.flags & dns.flags.AA)
+        proxy_check["got_flags"] = dns.flags.to_text(response.flags)
+        proxy_check["ra_flag"] = ra_set
+        proxy_check["aa_flag"] = aa_set
+        if ra_set:
+            proxy_check["passed"] = False
+            proxy_check["note"] = (
+                "RA=1 from authoritative root server — a transparent DNS proxy "
+                "is intercepting port 53 traffic"
+            )
+            findings.append(proxy_check["note"])
+        else:
+            proxy_check["passed"] = True
+            proxy_check["note"] = (
+                "RA=0 as expected — root server responded directly, no proxy"
+            )
+    except dns.exception.Timeout:
+        proxy_check["got_flags"] = "TIMEOUT"
+        proxy_check["note"] = (
+            "Timed out querying root server directly — network may block "
+            "direct port 53 to external servers"
+        )
+        errors.append("Transparent proxy check timed out querying 198.41.0.4")
+    except Exception as e:
+        proxy_check["got_flags"] = "ERROR"
+        proxy_check["note"] = f"Error: {e}"
+        errors.append(f"Transparent proxy check error: {e}")
+
+    # -------------------------------------------------------------------------
     # Verdict
     # -------------------------------------------------------------------------
     nxdomain_hijacked = nxdomain_check["got"] not in (
@@ -2268,6 +2316,7 @@ def detect_hijacking(
             "known_record": known_check,
             "dnssec_validation": dnssec_check,
             "resolver_identity": identity_check,
+            "transparent_proxy": proxy_check,
         },
         "verdict": verdict,
         "findings": findings,
