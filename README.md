@@ -51,10 +51,14 @@ can list and invoke them — no Claude-specific configuration required.
 | `dnssec_chain_audit` | Full DNSSEC chain-of-trust audit from the IANA root trust anchor down to the target domain |
 | `soc_email_forensics` | Forensic phishing analysis of a raw email (.eml or pasted headers) — returns TRUSTABLE / SUSPICIOUS / PHISHING / FURTHER ANALYSIS REQUIRED |
 
-Prompts set the analyst context and tool-use strategy for the session. Select
-one from your MCP client's prompt picker, then provide the domain or email to
-analyze. The LLM will run the appropriate tools in sequence and synthesize a
-structured report.
+Prompts set the analyst context and tool-use strategy for the session. The LLM
+runs the appropriate tools in sequence and synthesizes a structured report.
+
+**Client support note:** MCP prompt invocation requires client-side UI support.
+Claude Code CLI supports prompts via slash commands (see Quick Start §4).
+Claude Desktop currently exposes MCP tools only — prompts are registered but
+not reachable from the UI. Use tools ad-hoc in Desktop, or describe the
+analysis you want and the model will apply the same workflow.
 
 ## Example
 
@@ -129,17 +133,22 @@ make test                  # unit tests inside container
 
 ### 4. Start an analysis
 
-In Claude Desktop (or any MCP client that supports prompts), open the prompt
-picker and select one of the three analyst prompts. Then provide a domain or
-email to analyze:
+**Claude Code CLI** — invoke analyst prompts directly with slash commands:
 
-- **`email_security_audit`** → *"Check deflationhollow.net"*
-- **`dnssec_chain_audit`** → *"Audit dnssec.works"*
-- **`soc_email_forensics`** → *(attach or paste a raw .eml)*
+```
+/mcp__dns-mcp__email_security_audit   → "Check deflationhollow.net"
+/mcp__dns-mcp__dnssec_chain_audit     → "Audit dnssec.works"
+/mcp__dns-mcp__soc_email_forensics    → (paste raw .eml headers)
+```
 
-Without a prompt, you can also ask ad-hoc questions — your assistant will
-call individual tools as needed. The prompts simply give it a consistent
-analyst workflow and a structured report format.
+Type `/mcp__dns-mcp__` and tab-complete to see all three.
+
+**Claude Desktop** — prompts are not exposed in the Desktop UI (Desktop
+surfaces MCP tools only, not prompts). Just ask ad-hoc — the tools are all
+available and the model will run the same workflow:
+
+> *"Check the email security posture of deflationhollow.net"*
+> *"Audit the DNSSEC chain for dnssec.works"*
 
 ## Architecture
 
