@@ -31,7 +31,8 @@ through any MCP-compatible assistant in real time.
 | `check_bimi` | BIMI record and VMC (Verified Mark Certificate) check |
 | `check_mta_sts` | MTA-STS DNS record + HTTPS policy file fetch (mode, MX patterns, max_age) |
 | `check_smtp_tlsrpt` | SMTP TLS Reporting record check |
-| `check_dane` | DANE TLSA record check with DNSSEC validation |
+| `check_dane` | DANE TLSA record check with DNSSEC validation for a domain's MX hosts |
+| `check_tlsa` | Standalone TLSA record lookup for any hostname, port, and protocol |
 | `rdap_lookup` | Domain registration data via RDAP (modern WHOIS replacement) |
 
 ### Utility
@@ -221,7 +222,7 @@ docker run --rm -i dns-mcp python server.py
   | stdin/stdout (MCP stdio transport)
   v
 FastMCP server (server.py)
-  |  - All 18 tools
+  |  - All 19 tools
   |  - dnspython for DNS queries
   |  - requests for RDAP only
 ```
@@ -265,7 +266,7 @@ make test    # runs pytest inside container
 
 ```
 dns-mcp/
-├── server.py              # FastMCP server (18 tools, stdio transport)
+├── server.py              # FastMCP server (19 tools, stdio transport)
 ├── Dockerfile             # Single-stage Alpine image
 ├── docker-compose.yml     # Build target
 ├── Makefile               # build/test/shell

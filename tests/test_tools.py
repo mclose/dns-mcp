@@ -23,6 +23,7 @@ from server import (
     server_info,
     validate_domain,
     validate_selector,
+    validate_port,
     _parse_tag_value,
     _get_org_domain,
     check_spf,
@@ -33,6 +34,7 @@ from server import (
     check_smtp_tlsrpt,
     rdap_lookup,
     check_dane,
+    check_tlsa,
     detect_hijacking,
     email_security_audit,
     dnssec_chain_audit,
@@ -447,6 +449,39 @@ class TestValidateSelector:
 
     def test_underscore_invalid(self):
         valid, _ = validate_selector("sel_ector")
+        assert valid is False
+
+
+class TestValidatePort:
+    def test_valid_ports(self):
+        for port in (1, 25, 80, 443, 587, 65535):
+            valid, result = validate_port(port)
+            assert valid is True, f"Expected valid for port {port}"
+            assert result == str(port)
+
+    def test_zero_invalid(self):
+        valid, msg = validate_port(0)
+        assert valid is False
+
+    def test_negative_invalid(self):
+        valid, msg = validate_port(-1)
+        assert valid is False
+
+    def test_too_large(self):
+        valid, msg = validate_port(65536)
+        assert valid is False
+
+    def test_string_invalid(self):
+        valid, msg = validate_port("443")  # type: ignore[arg-type]
+        assert valid is False
+
+    def test_bool_invalid(self):
+        # bool is a subclass of int in Python — must reject explicitly
+        valid, msg = validate_port(True)  # type: ignore[arg-type]
+        assert valid is False
+
+    def test_float_invalid(self):
+        valid, msg = validate_port(443.0)  # type: ignore[arg-type]
         assert valid is False
 
 
@@ -1078,6 +1113,116 @@ class TestCheckDane:
         """dane_viable should always be a boolean"""
         result = check_dane("google.com")
         assert isinstance(result["dane_viable"], bool)
+
+
+# ---------------------------------------------------------------------------
+# check_tlsa
+# ---------------------------------------------------------------------------
+
+
+class TestCheckTlsa:
+    def test_known_tlsa_smtp(self):
+        """bund.de MX host _25._tcp — known DANE deployer"""
+        # Resolve the first MX first, then check TLSA directly
+        result = check_tlsa(
+            "mail.bund.de", port=25, protocol="tcp", nameserver="9.9.9.9"
+        )
+        # May or may not have TLSA depending on which MX; just check structure
+        assert "error" not in result
+        assert result["hostname"] == "mail.bund.de"
+        assert result["port"] == 25
+        assert result["protocol"] == "tcp"
+        assert "tlsa_fqdn" in result
+        assert result["tlsa_fqdn"] == "_25._tcp.mail.bund.de"
+
+    def test_no_tlsa_google(self):
+        """Google MX — no DANE, should return has_tlsa=False cleanly"""
+        result = check_tlsa(
+            "aspmx.l.google.com", port=25, protocol="tcp", nameserver="9.9.9.9"
+        )
+        assert "error" not in result
+        assert result["has_tlsa"] is False
+        assert result["dnssec_valid"] is False
+        assert result["tlsa_records"] == []
+
+    def test_https_port(self):
+        """Port 443 TLSA check — structural test"""
+        result = check_tlsa(
+            "cloudflare.com", port=443, protocol="tcp", nameserver="9.9.9.9"
+        )
+        assert "error" not in result
+        assert result["tlsa_fqdn"] == "_443._tcp.cloudflare.com"
+        assert isinstance(result["has_tlsa"], bool)
+
+    def test_udp_protocol(self):
+        """UDP protocol should form correct TLSA FQDN"""
+        result = check_tlsa(
+            "example.com", port=53, protocol="udp", nameserver="9.9.9.9"
+        )
+        assert "error" not in result
+        assert result["tlsa_fqdn"] == "_53._udp.example.com"
+
+    def test_bad_hostname(self):
+        """Invalid hostname returns error"""
+        result = check_tlsa("not valid!", port=25, protocol="tcp", nameserver="9.9.9.9")
+        assert "error" in result
+
+    def test_empty_hostname(self):
+        result = check_tlsa("", port=25, protocol="tcp", nameserver="9.9.9.9")
+        assert "error" in result
+
+    def test_bad_port_zero(self):
+        result = check_tlsa("example.com", port=0, protocol="tcp", nameserver="9.9.9.9")
+        assert "error" in result
+
+    def test_bad_port_too_large(self):
+        result = check_tlsa(
+            "example.com", port=99999, protocol="tcp", nameserver="9.9.9.9"
+        )
+        assert "error" in result
+
+    def test_bad_protocol(self):
+        result = check_tlsa(
+            "example.com", port=25, protocol="sctp", nameserver="9.9.9.9"
+        )  # type: ignore[arg-type]
+        assert "error" in result
+
+    def test_bad_nameserver(self):
+        result = check_tlsa(
+            "example.com", port=25, protocol="tcp", nameserver="not-an-ip"
+        )
+        assert "error" in result
+
+    def test_response_structure(self):
+        """All top-level keys must be present"""
+        result = check_tlsa(
+            "example.com", port=25, protocol="tcp", nameserver="9.9.9.9"
+        )
+        for key in [
+            "timestamp",
+            "hostname",
+            "port",
+            "protocol",
+            "nameserver",
+            "tlsa_fqdn",
+            "has_tlsa",
+            "dnssec_valid",
+            "tlsa_records",
+            "errors",
+        ]:
+            assert key in result, f"Missing key: {key}"
+
+    def test_errors_is_list(self):
+        result = check_tlsa(
+            "example.com", port=25, protocol="tcp", nameserver="9.9.9.9"
+        )
+        assert isinstance(result["errors"], list)
+
+    def test_tlsa_records_is_list(self):
+        result = check_tlsa(
+            "example.com", port=25, protocol="tcp", nameserver="9.9.9.9"
+        )
+        assert isinstance(result["tlsa_records"], list)
 
 
 # ---------------------------------------------------------------------------

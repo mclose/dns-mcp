@@ -140,7 +140,7 @@ sleep 0.5
 
 # ── Test 2: List tools ───────────────────────────────────────
 
-echo -e "${YELLOW}[2] List Tools (expect 18)${NC}"
+echo -e "${YELLOW}[2] List Tools (expect 19)${NC}"
 LIST_BODY='{"jsonrpc":"2.0","id":2,"method":"tools/list"}'
 echo "$LIST_BODY" | jq .
 echo "$LIST_BODY" >&3
@@ -152,10 +152,10 @@ if read -t 10 -r LIST_RESPONSE <&4; then
     echo -e "  Tools found: ${TOOL_COUNT}"
     echo "$TOOL_NAMES" | while read -r name; do echo "    - $name"; done
 
-    if [ "$TOOL_COUNT" -ge 18 ]; then
+    if [ "$TOOL_COUNT" -ge 19 ]; then
         PASS=$((PASS + 1))
     else
-        echo -e "${RED}  EXPECTED 18 tools, got ${TOOL_COUNT}${NC}"
+        echo -e "${RED}  EXPECTED 19 tools, got ${TOOL_COUNT}${NC}"
         FAIL=$((FAIL + 1))
     fi
 else
@@ -229,13 +229,16 @@ call_tool 20 "quine - server source introspection" \
 call_tool 21 "check_dane - bund.de (known DANE deployer)" \
     '{"jsonrpc":"2.0","id":21,"method":"tools/call","params":{"name":"check_dane","arguments":{"domain":"bund.de"}}}'
 
-call_tool 22 "detect_hijacking - 9.9.9.9 (Quad9)" \
-    '{"jsonrpc":"2.0","id":22,"method":"tools/call","params":{"name":"detect_hijacking","arguments":{"resolver":"9.9.9.9"}}}'
+call_tool 22 "check_tlsa - _25._tcp.mx1.bund.de (SMTP TLSA)" \
+    '{"jsonrpc":"2.0","id":22,"method":"tools/call","params":{"name":"check_tlsa","arguments":{"hostname":"mx1.bund.de","port":25,"protocol":"tcp","nameserver":"9.9.9.9"}}}'
+
+call_tool 23 "detect_hijacking - 9.9.9.9 (Quad9)" \
+    '{"jsonrpc":"2.0","id":23,"method":"tools/call","params":{"name":"detect_hijacking","arguments":{"resolver":"9.9.9.9"}}}'
 
 # ── Analyst Prompts ───────────────────────────────────────────
 
-echo -e "${YELLOW}[23] List Prompts (expect 3)${NC}"
-PROMPTS_LIST_BODY='{"jsonrpc":"2.0","id":23,"method":"prompts/list"}'
+echo -e "${YELLOW}[24] List Prompts (expect 3)${NC}"
+PROMPTS_LIST_BODY='{"jsonrpc":"2.0","id":24,"method":"prompts/list"}'
 echo "$PROMPTS_LIST_BODY" | jq .
 echo "$PROMPTS_LIST_BODY" >&3
 if read -t 10 -r PROMPTS_LIST_RESPONSE <&4; then
@@ -255,8 +258,8 @@ else
 fi
 echo ""
 
-echo -e "${YELLOW}[24] Get Prompt - email_security_audit${NC}"
-PROMPT_GET_BODY='{"jsonrpc":"2.0","id":24,"method":"prompts/get","params":{"name":"email_security_audit"}}'
+echo -e "${YELLOW}[25] Get Prompt - email_security_audit${NC}"
+PROMPT_GET_BODY='{"jsonrpc":"2.0","id":25,"method":"prompts/get","params":{"name":"email_security_audit"}}'
 echo "$PROMPT_GET_BODY" | jq .
 echo "$PROMPT_GET_BODY" >&3
 if read -t 10 -r PROMPT_GET_RESPONSE <&4; then

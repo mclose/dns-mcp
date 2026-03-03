@@ -26,6 +26,7 @@ Tools provided:
   - check_bimi: BIMI record and VMC check
   - check_mta_sts: MTA-STS DNS record check
   - check_smtp_tlsrpt: SMTP TLS Reporting record check
+  - check_tlsa: Direct TLSA record check for any host:port:protocol
   - check_dane: DANE TLSA record check for mail server authentication
   - rdap_lookup: Domain registration data via RDAP (HTTP, not DNS)
   - detect_hijacking: DNS hijacking and tampering detection for a resolver IP
@@ -80,6 +81,9 @@ TLSA_USAGE_NAMES = {0: "PKIX-TA", 1: "PKIX-EE", 2: "DANE-TA", 3: "DANE-EE"}
 TLSA_SELECTOR_NAMES = {0: "Full certificate", 1: "SubjectPublicKeyInfo"}
 TLSA_MATCHING_NAMES = {0: "Exact match", 1: "SHA-256", 2: "SHA-512"}
 
+# Default resolver for direct UDP queries (Quad9 — DNSSEC-validating, privacy-respecting)
+DEFAULT_RESOLVER = "9.9.9.9"
+
 # Hardcoded RDAP fallbacks for common TLDs
 _RDAP_FALLBACKS = {
     "com": "https://rdap.verisign.com/com/v1",
@@ -108,6 +112,15 @@ def validate_selector(selector: str) -> tuple[bool, str]:
     if not DNS_LABEL_PATTERN.match(selector):
         return False, "Selector must be alphanumeric with hyphens (DNS label format)"
     return True, selector
+
+
+def validate_port(port: int) -> tuple[bool, str]:
+    """Validate TCP/UDP port number (1-65535)"""
+    if not isinstance(port, int) or isinstance(port, bool):
+        return False, "Port must be an integer"
+    if port < 1 or port > 65535:
+        return False, f"Port {port} out of range (must be 1-65535)"
+    return True, str(port)
 
 
 def _parse_tag_value(record: str) -> dict[str, str]:
@@ -345,7 +358,9 @@ def dns_dig_style(
     record_type: Literal[
         "A", "AAAA", "MX", "TXT", "NS", "SOA", "CNAME", "PTR", "SRV"
     ] = "A",
-    nameserver: str = Field(default="9.9.9.9", description="Nameserver to query"),
+    nameserver: str = Field(
+        default=DEFAULT_RESOLVER, description="Nameserver to query"
+    ),
 ) -> dict:
     """
     Perform a dig-style DNS query showing full response details.
@@ -565,7 +580,7 @@ def dns_dnssec_validate(
     ),
     record_type: Literal["A", "AAAA", "MX", "TXT", "NS", "SOA", "CNAME"] = "A",
     nameserver: str = Field(
-        default="9.9.9.9", description="DNSSEC-validating resolver to use"
+        default=DEFAULT_RESOLVER, description="DNSSEC-validating resolver to use"
     ),
 ) -> dict:
     """
@@ -1447,6 +1462,58 @@ def check_smtp_tlsrpt(
     }
 
 
+def _query_tlsa(fqdn: str, nameserver: str) -> dict:
+    """
+    Query TLSA records for an FQDN with DNSSEC (DO flag) via direct UDP query.
+    Returns dict with: tlsa_records (list), ad_flag (bool), error (str|None), timeout (bool).
+    """
+    try:
+        query = dns.message.make_query(fqdn, dns.rdatatype.TLSA, want_dnssec=True)
+        response = dns.query.udp(query, nameserver, timeout=5.0)
+        ad_flag = bool(response.flags & dns.flags.AD)
+        tlsa_records = []
+        for rrset in response.answer:
+            if rrset.rdtype == dns.rdatatype.TLSA:
+                for rdata in rrset:
+                    tlsa_records.append(
+                        {
+                            "usage": rdata.usage,
+                            "usage_name": TLSA_USAGE_NAMES.get(
+                                rdata.usage, f"Unknown({rdata.usage})"
+                            ),
+                            "selector": rdata.selector,
+                            "selector_name": TLSA_SELECTOR_NAMES.get(
+                                rdata.selector, f"Unknown({rdata.selector})"
+                            ),
+                            "matching_type": rdata.mtype,
+                            "matching_type_name": TLSA_MATCHING_NAMES.get(
+                                rdata.mtype, f"Unknown({rdata.mtype})"
+                            ),
+                            "certificate_data": rdata.cert.hex(),
+                        }
+                    )
+        return {
+            "tlsa_records": tlsa_records,
+            "ad_flag": ad_flag,
+            "error": None,
+            "timeout": False,
+        }
+    except dns.exception.Timeout:
+        return {
+            "tlsa_records": [],
+            "ad_flag": False,
+            "error": "Query timed out",
+            "timeout": True,
+        }
+    except Exception as e:
+        return {
+            "tlsa_records": [],
+            "ad_flag": False,
+            "error": str(e),
+            "timeout": False,
+        }
+
+
 @mcp.tool()
 def check_dane(
     domain: str = Field(
@@ -1541,53 +1608,23 @@ def check_dane(
             "tlsa_records": [],
         }
 
-        try:
-            # Query TLSA with DNSSEC (DO flag) via 9.9.9.9
-            query = dns.message.make_query(
-                tlsa_fqdn, dns.rdatatype.TLSA, want_dnssec=True
-            )
-            response = dns.query.udp(query, "9.9.9.9", timeout=5.0)
-
-            # Check AD flag
-            ad_flag = bool(response.flags & dns.flags.AD)
-
-            # Parse TLSA records from answer section
-            tlsa_records = []
-            for rrset in response.answer:
-                if rrset.rdtype == dns.rdatatype.TLSA:
-                    for rdata in rrset:
-                        tlsa_records.append(
-                            {
-                                "usage": rdata.usage,
-                                "usage_name": TLSA_USAGE_NAMES.get(
-                                    rdata.usage, f"Unknown({rdata.usage})"
-                                ),
-                                "selector": rdata.selector,
-                                "selector_name": TLSA_SELECTOR_NAMES.get(
-                                    rdata.selector, f"Unknown({rdata.selector})"
-                                ),
-                                "matching_type": rdata.mtype,
-                                "matching_type_name": TLSA_MATCHING_NAMES.get(
-                                    rdata.mtype, f"Unknown({rdata.mtype})"
-                                ),
-                                "certificate_data": rdata.cert.hex(),
-                            }
-                        )
-
-            if tlsa_records:
-                host_entry["has_tlsa"] = True
-                host_entry["dnssec_valid"] = ad_flag
-                host_entry["tlsa_records"] = tlsa_records
-                if ad_flag:
-                    host_entry["dane_status"] = "dane_valid"
-                else:
-                    host_entry["dane_status"] = "dane_present_no_dnssec"
-            # else: no TLSA records → stays "no_dane"
-
-        except dns.exception.Timeout:
-            errors.append(f"TLSA query timeout for {tlsa_fqdn}")
-        except Exception as e:
-            errors.append(f"TLSA query failed for {tlsa_fqdn}: {str(e)}")
+        tlsa_result = _query_tlsa(tlsa_fqdn, DEFAULT_RESOLVER)
+        if tlsa_result["error"]:
+            if tlsa_result["timeout"]:
+                errors.append(f"TLSA query timeout for {tlsa_fqdn}")
+            else:
+                errors.append(
+                    f"TLSA query failed for {tlsa_fqdn}: {tlsa_result['error']}"
+                )
+        elif tlsa_result["tlsa_records"]:
+            host_entry["has_tlsa"] = True
+            host_entry["dnssec_valid"] = tlsa_result["ad_flag"]
+            host_entry["tlsa_records"] = tlsa_result["tlsa_records"]
+            if tlsa_result["ad_flag"]:
+                host_entry["dane_status"] = "dane_valid"
+            else:
+                host_entry["dane_status"] = "dane_present_no_dnssec"
+        # else: no TLSA records → stays "no_dane"
 
         mx_hosts.append(host_entry)
 
@@ -1628,6 +1665,71 @@ def check_dane(
         "dane_viable": dane_viable,
         "summary": summary,
         "errors": errors,
+    }
+
+
+@mcp.tool()
+def check_tlsa(
+    hostname: str = Field(
+        description="Hostname to check TLSA record for (e.g., 'mx1.example.com')"
+    ),
+    port: int = Field(description="Port number (e.g., 25 for SMTP, 443 for HTTPS)"),
+    protocol: Literal["tcp", "udp"] = "tcp",
+    nameserver: str | None = Field(
+        default=None,
+        description=f"Nameserver IP to query (default: {DEFAULT_RESOLVER})",
+    ),
+) -> dict:
+    """
+    Check for TLSA records at an arbitrary host:port:protocol combination.
+
+    Builds the TLSA FQDN as _{port}._{protocol}.{hostname} and queries for
+    TLSA records with DNSSEC (DO flag set). Reports whether records exist,
+    their parameters (usage, selector, matching type, certificate data),
+    and whether DNSSEC validation confirms authenticity (AD flag).
+
+    Useful for non-mail DANE (HTTPS on 443, XMPP, etc.) or when you already
+    know the MX hostname and want to check it directly without the MX lookup.
+    For a domain-level mail DANE check across all MX hosts, use check_dane.
+    """
+    valid, result = validate_domain(hostname)
+    if not valid:
+        return {"error": result, "hostname": hostname}
+
+    port_valid, port_result = validate_port(port)
+    if not port_valid:
+        return {"error": port_result, "hostname": hostname, "port": port}
+
+    if protocol not in ("tcp", "udp"):
+        return {
+            "error": f"Protocol must be 'tcp' or 'udp', got {protocol!r}",
+            "hostname": hostname,
+        }
+
+    ns = nameserver if nameserver is not None else DEFAULT_RESOLVER
+    if nameserver is not None:
+        try:
+            import ipaddress
+
+            ipaddress.ip_address(nameserver)
+        except ValueError:
+            return {"error": "Invalid nameserver IP address", "hostname": hostname}
+
+    tlsa_fqdn = f"_{port}._{protocol}.{hostname}"
+    tlsa_result = _query_tlsa(tlsa_fqdn, ns)
+    has_tlsa = bool(tlsa_result["tlsa_records"])
+
+    return {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "hostname": hostname,
+        "port": port,
+        "protocol": protocol,
+        "nameserver": ns,
+        "tlsa_fqdn": tlsa_fqdn,
+        "has_tlsa": has_tlsa,
+        "dnssec_valid": tlsa_result["ad_flag"] if has_tlsa else False,
+        "tlsa_records": tlsa_result["tlsa_records"],
+        "errors": [tlsa_result["error"]] if tlsa_result["error"] else [],
     }
 
 
@@ -2365,6 +2467,7 @@ def _print_startup_banner(transport: str):
         ("check_bimi", "Brand indicator & VMC verification"),
         ("check_mta_sts", "MTA-STS transport security policy analysis"),
         ("rdap_lookup", "Live domain registration data via RDAP"),
+        ("check_tlsa", "Direct TLSA record check for any host:port:protocol"),
         ("check_dane", "DANE TLSA + DNSSEC mail server authentication"),
         ("dns_dig_style", "Dig-style output with DNSSEC flags + DoE"),
         ("detect_hijacking", "DNS hijacking & tampering detection"),
@@ -2387,7 +2490,7 @@ def _print_startup_banner(transport: str):
             line("   🔍  d n s - m c p", 1),
             empty,
             line("   DNS & Domain Security Analysis Server"),
-            line(f"   17 tools · DNSSEC · MCP · {transport}"),
+            line(f"   19 tools · DNSSEC · MCP · {transport}"),
             empty,
             line(f"   ✨ Spotlight: {tool}", 1),
             line(f"      {desc}"),
