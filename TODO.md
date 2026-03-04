@@ -51,6 +51,22 @@ Working backlog. Items are roughly priority-ordered within each section.
 
 ---
 
+## Observability
+
+- [ ] **`session_stats` tool + `tracking.py`** — per-tool call tracking for the
+  container lifetime. In-process, zero-dependency, resets on container restart.
+  Pattern fully documented in `~/projects/ping-lite/TOOL_CALL_TRACKING.md`.
+  Implementation checklist:
+  - Add `tracking.py` at repo root (standalone module, no imports from `server.py`)
+  - Decorate all 19 tools with `@track("tool_name")` — inner decorator, `@mcp.tool()` outer
+  - Add `session_stats` as tool #20: uptime, total calls, per-tool count/errors/mean_ms/max_ms
+  - `Dockerfile`: add `tracking.py` to the `COPY` line (easy to forget)
+  - Tests: add `TestSessionStats` class; import `session_stats` and `get_stats`
+  - `test-mcp-stdio.sh`: bump count to 20, add `call_tool` for `session_stats`
+  - `README.md`: add `session_stats` to Utility tools table
+
+---
+
 ## Refactors
 
 - [ ] **`quine` — outline mode default** — at ~2500 lines, dumping the full source
