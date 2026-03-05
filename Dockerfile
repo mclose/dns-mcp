@@ -18,7 +18,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir --break-system-packages -r requirements.txt
 
 # Copy application code, prompts, and tests
-COPY server.py ./
+COPY server.py tracking.py ./
 COPY prompts/ prompts/
 COPY tests/ tests/
 

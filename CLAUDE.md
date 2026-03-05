@@ -19,8 +19,8 @@ See `README.md` for usage. This file is for working in the codebase.
 
 ```bash
 make build          # rebuild Docker image (required after any code change)
-make test           # pytest in container (167 tests)
-./test-mcp-stdio.sh # end-to-end MCP protocol test (25 tests)
+make test           # pytest in container (177 tests)
+./test-mcp-stdio.sh # end-to-end MCP protocol test (27 tests)
 make shell          # interactive shell inside the container
 ```
 

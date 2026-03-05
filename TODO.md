@@ -53,7 +53,7 @@ Working backlog. Items are roughly priority-ordered within each section.
 
 ## Observability
 
-- [ ] **`session_stats` tool + `tracking.py`** — per-tool call tracking for the
+- [x] **`session_stats` tool + `tracking.py`** — per-tool call tracking for the
   container lifetime. In-process, zero-dependency, resets on container restart.
   Pattern fully documented in `~/projects/ping-lite/TOOL_CALL_TRACKING.md`.
   Implementation checklist:
@@ -98,3 +98,4 @@ Working backlog. Items are roughly priority-ordered within each section.
 - [x] `email_security_audit` prompt — provider-aware DKIM, opaque selector handling
 - [x] `tools/email_security_posture_claude.sh`
 - [x] `CLAUDE.md` — public developer guide
+- [x] `tracking.py` + `session_stats` + `reset_stats` — per-tool call stats, container lifetime

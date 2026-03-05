@@ -41,6 +41,8 @@ through any MCP-compatible assistant in real time.
 | `ping` | Health check — returns pong with timestamp |
 | `server_info` | Show resolver config: dnspython version, nameservers, EDNS settings |
 | `quine` | Returns the source code of this server |
+| `session_stats` | Per-tool call counts, error rates, and latency for this container session |
+| `reset_stats` | Reset session stats and clock without restarting the container |
 
 ## Analyst Prompts
 
@@ -222,7 +224,7 @@ docker run --rm -i dns-mcp python server.py
   | stdin/stdout (MCP stdio transport)
   v
 FastMCP server (server.py)
-  |  - All 19 tools
+  |  - All 21 tools
   |  - dnspython for DNS queries
   |  - requests for RDAP only
 ```
@@ -266,7 +268,7 @@ make test    # runs pytest inside container
 
 ```
 dns-mcp/
-├── server.py              # FastMCP server (19 tools, stdio transport)
+├── server.py              # FastMCP server (21 tools, stdio transport)
 ├── Dockerfile             # Single-stage Alpine image
 ├── docker-compose.yml     # Build target
 ├── Makefile               # build/test/shell

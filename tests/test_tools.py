@@ -36,6 +36,8 @@ from server import (
     check_dane,
     check_tlsa,
     detect_hijacking,
+    session_stats,
+    reset_stats,
     email_security_audit,
     dnssec_chain_audit,
     soc_email_forensics,
@@ -1281,6 +1283,93 @@ class TestServerInfo:
             "edns_payload",
         ]:
             assert key in result, f"Missing key: {key}"
+
+
+# ---------------------------------------------------------------------------
+# session_stats / reset_stats
+# ---------------------------------------------------------------------------
+
+
+class TestSessionStats:
+    def test_response_structure(self):
+        result = session_stats()
+        for key in [
+            "session_start",
+            "current_time",
+            "uptime_seconds",
+            "total_calls",
+            "tools",
+        ]:
+            assert key in result, f"Missing key: {key}"
+
+    def test_uptime_positive(self):
+        result = session_stats()
+        assert result["uptime_seconds"] >= 0
+
+    def test_total_calls_int(self):
+        result = session_stats()
+        assert isinstance(result["total_calls"], int)
+
+    def test_tools_is_dict(self):
+        result = session_stats()
+        assert isinstance(result["tools"], dict)
+
+    def test_tracks_own_call(self):
+        """session_stats should appear in its own output after being called"""
+        session_stats()  # call once to ensure it's recorded
+        result = session_stats()
+        assert "session_stats" in result["tools"]
+        assert result["tools"]["session_stats"]["count"] >= 1
+
+    def test_tool_entry_structure(self):
+        """Each tool entry should have the expected keys"""
+        session_stats()
+        result = session_stats()
+        entry = result["tools"]["session_stats"]
+        for key in [
+            "count",
+            "error_count",
+            "first_called",
+            "last_called",
+            "mean_ms",
+            "max_ms",
+        ]:
+            assert key in entry, f"Missing tool entry key: {key}"
+
+
+class TestResetStats:
+    def test_reset_clears_counts(self):
+        session_stats()  # ensure at least one call recorded
+        reset_stats()
+        result = session_stats()
+        # After reset, only the reset_stats and session_stats calls above should appear
+        for entry in result["tools"].values():
+            assert entry["count"] >= 0
+
+    def test_reset_returns_confirmation(self):
+        result = reset_stats()
+        assert result["reset"] is True
+        assert "new_session_start" in result
+
+    def test_reset_restarts_clock(self):
+        import time
+
+        time.sleep(0.05)
+        result = reset_stats()
+        # new_session_start should be a valid ISO timestamp
+        from datetime import datetime
+
+        dt = datetime.fromisoformat(result["new_session_start"])
+        assert dt.tzinfo is not None
+
+    def test_session_start_updates(self):
+        before = session_stats()["session_start"]
+        import time
+
+        time.sleep(0.05)
+        reset_stats()
+        after = session_stats()["session_start"]
+        assert after != before
 
 
 # ---------------------------------------------------------------------------

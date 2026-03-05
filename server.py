@@ -10,6 +10,8 @@ Tools provided:
   - ping: Lightweight health check (no external dependencies)
   - server_info: Show resolver config (nameservers, dnspython version, etc.)
   - quine: Return the source code of this MCP server
+  - session_stats: Per-tool call counts, errors, and latency for this container session
+  - reset_stats: Reset session stats and clock without restarting the container
 
   DNS:
   - dns_query: Standard DNS lookups for common record types
@@ -54,6 +56,8 @@ import secrets
 import ipaddress
 import requests
 from pydantic import Field
+import tracking
+from tracking import track, reset_stats as _reset_stats
 
 # Initialize FastMCP server
 mcp = FastMCP("DNS Query Server")
@@ -192,6 +196,7 @@ def _get_org_domain(domain: str) -> str:
 
 
 @mcp.tool()
+@track("ping")
 def ping() -> dict:
     """
     Lightweight health check. Returns server status and timestamp with no
@@ -205,6 +210,7 @@ def ping() -> dict:
 
 
 @mcp.tool()
+@track("server_info")
 def server_info() -> dict:
     """
     Show server configuration: dnspython version, configured nameservers,
@@ -224,6 +230,7 @@ def server_info() -> dict:
 
 
 @mcp.tool()
+@track("quine")
 def quine() -> dict:
     """
     Return the source code of this MCP server.
@@ -243,6 +250,43 @@ def quine() -> dict:
 
 
 @mcp.tool()
+@track("session_stats")
+def session_stats() -> dict:
+    """
+    Return per-tool call statistics for this container session.
+    Reports uptime, total calls, and per-tool count/errors/latency since container start.
+    Stats reset on every container restart — in-process only, no persistence.
+    """
+    now = datetime.now(timezone.utc)
+    uptime = (now - tracking._session_start).total_seconds()
+    per_tool = tracking.get_stats()
+    total = sum(s["count"] for s in per_tool.values())
+    return {
+        "session_start": tracking._session_start.isoformat(),
+        "current_time": now.isoformat(),
+        "uptime_seconds": round(uptime, 1),
+        "total_calls": total,
+        "tools": per_tool,
+    }
+
+
+@mcp.tool()
+@track("reset_stats")
+def reset_stats() -> dict:
+    """
+    Reset all per-tool call statistics and restart the session clock.
+    Use this to start a fresh measurement window without restarting the container.
+    Returns a confirmation with the new session start time.
+    """
+    _reset_stats()
+    return {
+        "reset": True,
+        "new_session_start": tracking._session_start.isoformat(),
+    }
+
+
+@mcp.tool()
+@track("dns_query")
 def dns_query(
     domain: str = Field(description="Domain name to query (e.g., 'example.com')"),
     record_type: Literal[
@@ -353,6 +397,7 @@ def dns_query(
 
 
 @mcp.tool()
+@track("dns_dig_style")
 def dns_dig_style(
     domain: str = Field(description="Domain name to query"),
     record_type: Literal[
@@ -467,6 +512,7 @@ def dns_dig_style(
 
 
 @mcp.tool()
+@track("timestamp_converter")
 def timestamp_converter(
     timestamp: str | int | float, convert_to: Literal["iso", "epoch", "human"] = "iso"
 ) -> dict:
@@ -528,6 +574,7 @@ def timestamp_converter(
 
 
 @mcp.tool()
+@track("reverse_dns")
 def reverse_dns(
     ip_address: str = Field(description="IP address for reverse DNS lookup"),
 ) -> dict:
@@ -574,6 +621,7 @@ def reverse_dns(
 
 
 @mcp.tool()
+@track("dns_dnssec_validate")
 def dns_dnssec_validate(
     domain: str = Field(
         description="Domain name to validate (e.g., 'claude.lab.deflationhollow.net')"
@@ -931,6 +979,7 @@ def dns_dnssec_validate(
 
 
 @mcp.tool()
+@track("check_spf")
 def check_spf(
     domain: str = Field(
         description="Domain to check SPF record for (e.g., 'example.com')"
@@ -1099,6 +1148,7 @@ def check_spf(
 
 
 @mcp.tool()
+@track("check_dmarc")
 def check_dmarc(
     domain: str = Field(description="Domain to check DMARC for (the From: domain)"),
 ) -> dict:
@@ -1185,6 +1235,7 @@ def check_dmarc(
 
 
 @mcp.tool()
+@track("check_dkim_selector")
 def check_dkim_selector(
     selector: str = Field(
         description="DKIM selector (s= value from DKIM-Signature header)"
@@ -1254,6 +1305,7 @@ def check_dkim_selector(
 
 
 @mcp.tool()
+@track("check_bimi")
 def check_bimi(
     domain: str = Field(description="Domain to check BIMI record for"),
     selector: str = Field(
@@ -1314,6 +1366,7 @@ def check_bimi(
 
 
 @mcp.tool()
+@track("check_mta_sts")
 def check_mta_sts(
     domain: str = Field(description="Domain to check MTA-STS record for"),
     fetch_policy: bool = Field(
@@ -1416,6 +1469,7 @@ def _fetch_mta_sts_policy(domain: str, errors: list) -> dict | None:
 
 
 @mcp.tool()
+@track("check_smtp_tlsrpt")
 def check_smtp_tlsrpt(
     domain: str = Field(description="Domain to check SMTP TLS Reporting record for"),
 ) -> dict:
@@ -1515,6 +1569,7 @@ def _query_tlsa(fqdn: str, nameserver: str) -> dict:
 
 
 @mcp.tool()
+@track("check_dane")
 def check_dane(
     domain: str = Field(
         description="Domain to check DANE for (the From: domain, not the MX hostname)"
@@ -1669,6 +1724,7 @@ def check_dane(
 
 
 @mcp.tool()
+@track("check_tlsa")
 def check_tlsa(
     hostname: str = Field(
         description="Hostname to check TLSA record for (e.g., 'mx1.example.com')"
@@ -1734,6 +1790,7 @@ def check_tlsa(
 
 
 @mcp.tool()
+@track("nsec_info")
 def nsec_info(
     domain: str = Field(description="Domain to check (e.g., 'example.com')"),
 ) -> dict:
@@ -2024,6 +2081,7 @@ def nsec_info(
 
 
 @mcp.tool()
+@track("rdap_lookup")
 def rdap_lookup(
     domain: str = Field(
         description="Domain to look up via RDAP (registrable domain, not subdomain)"
@@ -2179,6 +2237,7 @@ def rdap_lookup(
 
 
 @mcp.tool()
+@track("detect_hijacking")
 def detect_hijacking(
     resolver: str = Field(
         description="IP address of the resolver to test (e.g. 192.168.1.1)"
@@ -2490,7 +2549,7 @@ def _print_startup_banner(transport: str):
             line("   🔍  d n s - m c p", 1),
             empty,
             line("   DNS & Domain Security Analysis Server"),
-            line(f"   19 tools · DNSSEC · MCP · {transport}"),
+            line(f"   21 tools · DNSSEC · MCP · {transport}"),
             empty,
             line(f"   ✨ Spotlight: {tool}", 1),
             line(f"      {desc}"),
