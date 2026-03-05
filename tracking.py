@@ -6,6 +6,7 @@ Imported by server.py — do not import server from here (circular).
 """
 
 import inspect
+import sys
 import time
 from collections import defaultdict
 from datetime import datetime, timezone
@@ -24,6 +25,20 @@ _call_stats: dict[str, dict] = defaultdict(
     }
 )
 
+# Keys checked in order when building the log entry line.
+_KEY_ARG_PRIORITY = ("domain", "hostname", "ip_address", "resolver", "timestamp")
+
+
+def _log(msg: str) -> None:
+    print(f"[TOOL] {msg}", file=sys.stderr, flush=True)
+
+
+def _key_arg(kwargs: dict) -> str:
+    for key in _KEY_ARG_PRIORITY:
+        if key in kwargs:
+            return f"{key}={kwargs[key]}"
+    return ""
+
 
 def track(name: str):
     """Decorator factory. Records count, timing, and errors per tool call."""
@@ -39,10 +54,18 @@ def track(name: str):
                 if stats["first_called"] is None:
                     stats["first_called"] = now
                 stats["last_called"] = now
+
+                label = f"{name} {_key_arg(kwargs)}".strip()
+                _log(f"→ {label}")
+
                 t0 = time.perf_counter()
+                exc_raised = False
+                ret_val = None
                 try:
-                    return await fn(*args, **kwargs)
+                    ret_val = await fn(*args, **kwargs)
+                    return ret_val
                 except Exception:
+                    exc_raised = True
                     stats["error_count"] += 1
                     raise
                 finally:
@@ -50,6 +73,13 @@ def track(name: str):
                     stats["_sum_ms"] += ms
                     if ms > stats["max_ms"]:
                         stats["max_ms"] = ms
+                    if exc_raised:
+                        status = "EXCEPTION"
+                    elif isinstance(ret_val, dict) and "error" in ret_val:
+                        status = "ERR"
+                    else:
+                        status = "ok"
+                    _log(f"← {name} {status} {ms:.0f}ms")
 
             return async_wrapper
         else:
@@ -62,10 +92,18 @@ def track(name: str):
                 if stats["first_called"] is None:
                     stats["first_called"] = now
                 stats["last_called"] = now
+
+                label = f"{name} {_key_arg(kwargs)}".strip()
+                _log(f"→ {label}")
+
                 t0 = time.perf_counter()
+                exc_raised = False
+                ret_val = None
                 try:
-                    return fn(*args, **kwargs)
+                    ret_val = fn(*args, **kwargs)
+                    return ret_val
                 except Exception:
+                    exc_raised = True
                     stats["error_count"] += 1
                     raise
                 finally:
@@ -73,6 +111,13 @@ def track(name: str):
                     stats["_sum_ms"] += ms
                     if ms > stats["max_ms"]:
                         stats["max_ms"] = ms
+                    if exc_raised:
+                        status = "EXCEPTION"
+                    elif isinstance(ret_val, dict) and "error" in ret_val:
+                        status = "ERR"
+                    else:
+                        status = "ok"
+                    _log(f"← {name} {status} {ms:.0f}ms")
 
             return sync_wrapper
 
