@@ -16,17 +16,39 @@ Working backlog. Items are roughly priority-ordered within each section.
 
 ## Infrastructure
 
-- [ ] **Logging** — Docker JSON logs are unreadable and `docker logs` output is noisy.
-  Need structured human-readable logging to stderr without polluting the MCP stdio
-  channel (stdout is JSON-RPC). Options:
-  - Per-tool invocation lines to stderr: `[TOOL] check_spf domain=example.com`
-  - Result summary on completion: `[TOOL] check_spf → ok (3 lookups) 142ms`
-  - FastMCP may already emit some stderr; investigate before adding more
-  - Must not break `./test-mcp-stdio.sh` (which captures stdout only)
+- [x] **Logging** — per-tool invocation + result lines to stderr via `tracking.py`.
+  Format: `[TOOL] → check_spf domain=example.com` / `[TOOL] ← check_spf ok (reject) 142ms`.
+  Status: ok / ERR (soft error dict) / EXCEPTION. Summary from well-known result keys
+  (overall_status, verdict, denial_type, policy). stdout stays clean for JSON-RPC.
 
 - [ ] **DEFAULT_RESOLVER via env var** — `DEFAULT_RESOLVER` is currently the
   constant `"9.9.9.9"`. Read from `DNS_RESOLVER` env var at startup so operators
   can override without rebuilding the image.
+
+---
+
+## Encrypted DNS transports & EDNS
+
+- [ ] **DNS over TLS (DoT)** — add `transport` param to `dns_dig_style` (or new tool)
+  supporting `udp` (default), `dot`. Uses `dns.query.tls()` from dnspython, port 853.
+  Surface TLS details: cipher suite, certificate CN, verification status.
+
+- [ ] **DNS over HTTPS (DoH)** — `transport=doh`. Uses `dns.query.https()` from dnspython.
+  Resolver configured as URL (e.g. `https://dns.quad9.net/dns-query`). Surface HTTP
+  response metadata. Needs `requests` or `httpx` in container.
+
+- [ ] **DNS over QUIC (DoQ)** — `transport=doq`. Needs `aioquic` or similar; assess
+  dnspython support first. Port 853/8853. Lower priority — limited resolver support.
+
+- [ ] **Cross-transport hijacking detection** — enhance `detect_hijacking` with a DoT
+  check: query the same known record via plain UDP and via DoT, compare answers.
+  Mismatch is definitive hijack evidence (DoT bypasses port-53 interception by
+  captive portals and rogue WiFi routers). Cleaner signal than the current NXDOMAIN
+  probe alone.
+
+- [ ] **EDNS** — surface EDNS0 metadata in `dns_dig_style` and/or `dns_query`:
+  buffer size, EDNS version, DO (DNSSEC OK) bit, extended RCODE. Optionally add
+  EDNS Client Subnet (ECS, RFC 7871) option support to show/send subnet hints.
 
 ---
 
@@ -99,3 +121,4 @@ Working backlog. Items are roughly priority-ordered within each section.
 - [x] `tools/email_security_posture_claude.sh`
 - [x] `CLAUDE.md` — public developer guide
 - [x] `tracking.py` + `session_stats` + `reset_stats` — per-tool call stats, container lifetime
+- [x] Per-tool stderr logging — `[TOOL] → name key=val` / `[TOOL] ← name ok (summary) Xms`
