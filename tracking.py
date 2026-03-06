@@ -28,6 +28,9 @@ _call_stats: dict[str, dict] = defaultdict(
 # Keys checked in order when building the log entry line.
 _KEY_ARG_PRIORITY = ("domain", "hostname", "ip_address", "resolver", "timestamp")
 
+# Result dict keys surfaced as a parenthetical summary in the exit log line.
+_SUMMARY_KEYS = ("overall_status", "verdict", "denial_type", "policy")
+
 
 def _log(msg: str) -> None:
     print(f"[TOOL] {msg}", file=sys.stderr, flush=True)
@@ -37,6 +40,15 @@ def _key_arg(kwargs: dict) -> str:
     for key in _KEY_ARG_PRIORITY:
         if key in kwargs:
             return f"{key}={kwargs[key]}"
+    return ""
+
+
+def _result_summary(ret_val) -> str:
+    if not isinstance(ret_val, dict):
+        return ""
+    for key in _SUMMARY_KEYS:
+        if key in ret_val:
+            return f" ({ret_val[key]})"
     return ""
 
 
@@ -79,7 +91,7 @@ def track(name: str):
                         status = "ERR"
                     else:
                         status = "ok"
-                    _log(f"← {name} {status} {ms:.0f}ms")
+                    _log(f"← {name} {status}{_result_summary(ret_val)} {ms:.0f}ms")
 
             return async_wrapper
         else:
@@ -117,7 +129,7 @@ def track(name: str):
                         status = "ERR"
                     else:
                         status = "ok"
-                    _log(f"← {name} {status} {ms:.0f}ms")
+                    _log(f"← {name} {status}{_result_summary(ret_val)} {ms:.0f}ms")
 
             return sync_wrapper
 
