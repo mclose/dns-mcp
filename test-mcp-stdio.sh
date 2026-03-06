@@ -140,7 +140,7 @@ sleep 0.5
 
 # ── Test 2: List tools ───────────────────────────────────────
 
-echo -e "${YELLOW}[2] List Tools (expect 21)${NC}"
+echo -e "${YELLOW}[2] List Tools (expect 22)${NC}"
 LIST_BODY='{"jsonrpc":"2.0","id":2,"method":"tools/list"}'
 echo "$LIST_BODY" | jq .
 echo "$LIST_BODY" >&3
@@ -152,10 +152,10 @@ if read -t 10 -r LIST_RESPONSE <&4; then
     echo -e "  Tools found: ${TOOL_COUNT}"
     echo "$TOOL_NAMES" | while read -r name; do echo "    - $name"; done
 
-    if [ "$TOOL_COUNT" -ge 21 ]; then
+    if [ "$TOOL_COUNT" -ge 22 ]; then
         PASS=$((PASS + 1))
     else
-        echo -e "${RED}  EXPECTED 21 tools, got ${TOOL_COUNT}${NC}"
+        echo -e "${RED}  EXPECTED 22 tools, got ${TOOL_COUNT}${NC}"
         FAIL=$((FAIL + 1))
     fi
 else
@@ -241,10 +241,13 @@ call_tool 24 "session_stats - container lifetime stats" \
 call_tool 25 "reset_stats - reset session clock and counters" \
     '{"jsonrpc":"2.0","id":25,"method":"tools/call","params":{"name":"reset_stats","arguments":{}}}'
 
+call_tool 26 "dns_query_dot - example.com A via DoT (9.9.9.9:853)" \
+    '{"jsonrpc":"2.0","id":26,"method":"tools/call","params":{"name":"dns_query_dot","arguments":{"domain":"example.com","record_type":"A","nameserver":"9.9.9.9","port":853}}}'
+
 # ── Analyst Prompts ───────────────────────────────────────────
 
-echo -e "${YELLOW}[26] List Prompts (expect 3)${NC}"
-PROMPTS_LIST_BODY='{"jsonrpc":"2.0","id":26,"method":"prompts/list"}'
+echo -e "${YELLOW}[27] List Prompts (expect 3)${NC}"
+PROMPTS_LIST_BODY='{"jsonrpc":"2.0","id":27,"method":"prompts/list"}'
 echo "$PROMPTS_LIST_BODY" | jq .
 echo "$PROMPTS_LIST_BODY" >&3
 if read -t 10 -r PROMPTS_LIST_RESPONSE <&4; then
@@ -264,8 +267,8 @@ else
 fi
 echo ""
 
-echo -e "${YELLOW}[27] Get Prompt - email_security_audit${NC}"
-PROMPT_GET_BODY='{"jsonrpc":"2.0","id":27,"method":"prompts/get","params":{"name":"email_security_audit"}}'
+echo -e "${YELLOW}[28] Get Prompt - email_security_audit${NC}"
+PROMPT_GET_BODY='{"jsonrpc":"2.0","id":28,"method":"prompts/get","params":{"name":"email_security_audit"}}'
 echo "$PROMPT_GET_BODY" | jq .
 echo "$PROMPT_GET_BODY" >&3
 if read -t 10 -r PROMPT_GET_RESPONSE <&4; then

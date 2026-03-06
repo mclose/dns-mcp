@@ -16,6 +16,7 @@ through any MCP-compatible assistant in real time.
 |------|-------------|
 | `dns_query` | Standard DNS lookups (A, AAAA, MX, TXT, NS, SOA, CNAME, PTR, SRV) |
 | `dns_dig_style` | Detailed dig-style output with DNSSEC flags (DO flag set) |
+| `dns_query_dot` | DNS over TLS (DoT) query — TLS session info, EDNS pseudosection, DNSSEC flags |
 | `dns_dnssec_validate` | Chain-of-trust validation like `delv +vtrace` |
 | `nsec_info` | NSEC/NSEC3 denial-of-existence analysis and zone walkability assessment |
 | `reverse_dns` | PTR record lookups for IP addresses |
@@ -224,7 +225,7 @@ docker run --rm -i dns-mcp python server.py
   | stdin/stdout (MCP stdio transport)
   v
 FastMCP server (server.py)
-  |  - All 21 tools
+  |  - All 22 tools
   |  - dnspython for DNS queries
   |  - requests for RDAP only
 ```
@@ -268,7 +269,7 @@ make test    # runs pytest inside container
 
 ```
 dns-mcp/
-├── server.py              # FastMCP server (21 tools, stdio transport)
+├── server.py              # FastMCP server (22 tools, stdio transport)
 ├── Dockerfile             # Single-stage Alpine image
 ├── docker-compose.yml     # Build target
 ├── Makefile               # build/test/shell

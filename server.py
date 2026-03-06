@@ -16,6 +16,7 @@ Tools provided:
   DNS:
   - dns_query: Standard DNS lookups for common record types
   - dns_dig_style: Detailed dig-style queries showing full response sections
+  - dns_query_dot: DNS over TLS (DoT) query with TLS session and EDNS details
   - reverse_dns: PTR record lookups for IP addresses
   - dns_dnssec_validate: DNSSEC chain-of-trust validation
   - nsec_info: NSEC/NSEC3 denial-of-existence analysis and zone walkability check
@@ -54,6 +55,9 @@ from typing import Literal
 import re
 import secrets
 import ipaddress
+import socket
+import ssl
+import time
 import requests
 from pydantic import Field
 import tracking
@@ -87,6 +91,10 @@ TLSA_MATCHING_NAMES = {0: "Exact match", 1: "SHA-256", 2: "SHA-512"}
 
 # Default resolver for direct UDP queries (Quad9 — DNSSEC-validating, privacy-respecting)
 DEFAULT_RESOLVER = "9.9.9.9"
+# DoT default uses Cloudflare (1.1.1.1) rather than Quad9. When Docker runs
+# with --dns 9.9.9.9, it installs NAT rules that interfere with TCP port 853
+# connections back to the same IP, causing "Connection reset by peer".
+DEFAULT_DOT_RESOLVER = "1.1.1.1"
 
 # Hardcoded RDAP fallbacks for common TLDs
 _RDAP_FALLBACKS = {
@@ -509,6 +517,194 @@ def dns_dig_style(
             "record_type": record_type,
             "nameserver": nameserver,
         }
+
+
+def _dot_query(
+    q: dns.message.Message,
+    nameserver: str,
+    port: int = 853,
+    timeout: float = 10.0,
+) -> tuple:
+    """Send a DNS query over TLS (DoT, RFC 7858). Returns (response, elapsed_ms, tls_info)."""
+    ctx = ssl.create_default_context()
+    # IP-based resolver connections cannot use hostname verification (no SNI target).
+    # This matches kdig's default behaviour when given a bare IP.
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+
+    wire = q.to_wire()
+    length_prefix = len(wire).to_bytes(2, "big")
+
+    t0 = time.perf_counter()
+    with socket.create_connection((nameserver, port), timeout=timeout) as raw_sock:
+        raw_sock.settimeout(timeout)
+        with ctx.wrap_socket(raw_sock) as tls_sock:
+            cipher_tuple = tls_sock.cipher()  # (name, protocol, bits)
+            tls_version = tls_sock.version()
+            tls_sock.sendall(length_prefix + wire)
+
+            # Read 2-byte response length prefix (RFC 7858 §3.3)
+            buf = b""
+            while len(buf) < 2:
+                chunk = tls_sock.recv(2 - len(buf))
+                if not chunk:
+                    raise ConnectionError("Connection closed before response length")
+                buf += chunk
+
+            msg_len = int.from_bytes(buf, "big")
+
+            msg_data = b""
+            while len(msg_data) < msg_len:
+                chunk = tls_sock.recv(msg_len - len(msg_data))
+                if not chunk:
+                    raise ConnectionError("Connection closed before full response")
+                msg_data += chunk
+
+    elapsed_ms = (time.perf_counter() - t0) * 1000
+    cipher_name, proto_version, cipher_bits = cipher_tuple or ("unknown", "unknown", 0)
+    tls_info = {
+        "version": tls_version or proto_version,
+        "cipher": cipher_name,
+        "bits": cipher_bits,
+    }
+    return dns.message.from_wire(msg_data), elapsed_ms, tls_info
+
+
+@mcp.tool()
+@track("dns_query_dot")
+def dns_query_dot(
+    domain: str = Field(description="Domain name to query"),
+    record_type: Literal[
+        "A", "AAAA", "MX", "TXT", "NS", "SOA", "CNAME", "PTR", "SRV"
+    ] = "A",
+    nameserver: str = Field(
+        default=DEFAULT_DOT_RESOLVER,
+        description=f"Resolver IP supporting DoT on port 853 (default: {DEFAULT_DOT_RESOLVER})",
+    ),
+    port: int = Field(default=853, description="DoT port (default: 853)"),
+) -> dict:
+    """
+    Perform a DNS over TLS (DoT) query showing full response details.
+
+    Establishes a TLS session directly to the resolver and sends a DNSSEC-enabled
+    query, similar to: kdig @resolver +tls +dnssec +multi <type> <domain>
+
+    Returns:
+    - TLS session: protocol version (TLS1.3), cipher suite, key bits
+    - Header: status (NOERROR/NXDOMAIN/SERVFAIL/REFUSED), flags (qr/rd/ra/ad/aa/tc/cd)
+    - EDNS pseudosection: version, DO flag, UDP payload size, padding bytes
+    - Answer, Authority, Additional sections with full record details
+    - Round-trip time in ms
+    """
+    valid, result = validate_domain(domain)
+    if not valid:
+        return {"error": result, "domain": domain}
+
+    try:
+        ipaddress.ip_address(nameserver)
+    except ValueError:
+        return {"error": "Invalid nameserver IP address", "domain": domain}
+
+    valid_port, port_msg = validate_port(port)
+    if not valid_port:
+        return {"error": port_msg, "domain": domain}
+
+    try:
+        rdtype = dns.rdatatype.from_text(record_type)
+    except dns.rdatatype.UnknownRdatatype:
+        return {"error": f"Unknown record type: {record_type}", "domain": domain}
+
+    q = dns.message.make_query(domain, rdtype, want_dnssec=True)
+
+    try:
+        response, elapsed_ms, tls_info = _dot_query(q, nameserver, port)
+    except Exception as e:
+        return {
+            "error": f"DoT query failed: {e}",
+            "domain": domain,
+            "nameserver": nameserver,
+            "port": port,
+            "transport": "DoT",
+        }
+
+    # Build flags list in wire order
+    flags = []
+    for flag_bit, flag_name in (
+        (dns.flags.QR, "qr"),
+        (dns.flags.AA, "aa"),
+        (dns.flags.TC, "tc"),
+        (dns.flags.RD, "rd"),
+        (dns.flags.RA, "ra"),
+        (dns.flags.AD, "ad"),
+        (dns.flags.CD, "cd"),
+    ):
+        if response.flags & flag_bit:
+            flags.append(flag_name)
+
+    # EDNS pseudosection
+    edns_info = None
+    if response.edns >= 0:
+        edns_flags = []
+        if response.ednsflags & dns.flags.DO:
+            edns_flags.append("do")
+        edns_info = {
+            "version": response.edns,
+            "flags": edns_flags,
+            "udp_size": response.payload,
+        }
+        for opt in response.options:
+            if opt.otype == 12:  # PADDING (RFC 7830)
+                edns_info["padding_bytes"] = len(opt.data)
+
+    def format_section(section):
+        out = []
+        for rrset in section:
+            for rdata in rrset:
+                out.append(
+                    {
+                        "name": str(rrset.name),
+                        "ttl": rrset.ttl,
+                        "class": dns.rdataclass.to_text(rrset.rdclass),
+                        "type": dns.rdatatype.to_text(rrset.rdtype),
+                        "data": str(rdata),
+                    }
+                )
+        return out
+
+    return {
+        "transport": "DoT",
+        "nameserver": nameserver,
+        "port": port,
+        "tls_session": tls_info,
+        "header": {
+            "id": response.id,
+            "opcode": dns.opcode.to_text(response.opcode()),
+            "status": dns.rcode.to_text(response.rcode()),
+            "flags": flags,
+            "question_count": len(response.question),
+            "answer_count": len(response.answer),
+            "authority_count": len(response.authority),
+            # OPT record counts as additional in wire ARCOUNT
+            "additional_count": len(response.additional)
+            + (1 if response.edns >= 0 else 0),
+        },
+        "edns": edns_info,
+        "sections": {
+            "question": [
+                {
+                    "name": str(q.name),
+                    "type": dns.rdatatype.to_text(q.rdtype),
+                    "class": dns.rdataclass.to_text(q.rdclass),
+                }
+                for q in response.question
+            ],
+            "answer": format_section(response.answer),
+            "authority": format_section(response.authority),
+            "additional": format_section(response.additional),
+        },
+        "elapsed_ms": round(elapsed_ms, 1),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
 
 
 @mcp.tool()
@@ -2549,7 +2745,7 @@ def _print_startup_banner(transport: str):
             line("   🔍  d n s - m c p", 1),
             empty,
             line("   DNS & Domain Security Analysis Server"),
-            line(f"   21 tools · DNSSEC · MCP · {transport}"),
+            line(f"   22 tools · DNSSEC · MCP · {transport}"),
             empty,
             line(f"   ✨ Spotlight: {tool}", 1),
             line(f"      {desc}"),

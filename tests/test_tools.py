@@ -15,6 +15,7 @@ Note: Pydantic Field() defaults don't resolve when calling functions directly
 from server import (
     dns_query,
     dns_dig_style,
+    dns_query_dot,
     timestamp_converter,
     reverse_dns,
     dns_dnssec_validate,
@@ -175,6 +176,88 @@ class TestDnsDigStyle:
         assert doe["present"] is True
         assert doe["type"] in ("NSEC", "NSEC3")
         assert doe["record_count"] > 0
+
+
+# ---------------------------------------------------------------------------
+# dns_query_dot
+# ---------------------------------------------------------------------------
+
+
+class TestDnsQueryDot:
+    def test_basic_query(self):
+        result = dns_query_dot("example.com", "A", nameserver="1.1.1.1", port=853)
+        assert "error" not in result
+        assert result["transport"] == "DoT"
+        assert result["nameserver"] == "1.1.1.1"
+
+    def test_tls_session_present(self):
+        result = dns_query_dot("example.com", "A", nameserver="1.1.1.1", port=853)
+        assert "error" not in result
+        tls = result["tls_session"]
+        assert "version" in tls
+        assert "cipher" in tls
+        assert "bits" in tls
+        assert tls["version"] is not None
+
+    def test_header_fields(self):
+        result = dns_query_dot("example.com", "A", nameserver="1.1.1.1", port=853)
+        assert "error" not in result
+        header = result["header"]
+        assert header["status"] == "NOERROR"
+        assert "flags" in header
+        assert "qr" in header["flags"]
+        assert "opcode" in header
+
+    def test_edns_present(self):
+        result = dns_query_dot("example.com", "A", nameserver="1.1.1.1", port=853)
+        assert "error" not in result
+        edns = result["edns"]
+        assert edns is not None
+        assert "version" in edns
+        assert "udp_size" in edns
+
+    def test_sections_present(self):
+        result = dns_query_dot("example.com", "A", nameserver="1.1.1.1", port=853)
+        assert "error" not in result
+        sections = result["sections"]
+        assert "question" in sections
+        assert "answer" in sections
+        assert "authority" in sections
+        assert "additional" in sections
+        assert len(sections["answer"]) > 0
+
+    def test_answer_record_structure(self):
+        result = dns_query_dot("example.com", "A", nameserver="1.1.1.1", port=853)
+        assert "error" not in result
+        for rec in result["sections"]["answer"]:
+            assert "name" in rec
+            assert "ttl" in rec
+            assert "type" in rec
+            assert "data" in rec
+
+    def test_nxdomain(self):
+        result = dns_query_dot(
+            "this-does-not-exist-xyzzy-dot.invalid",
+            "A",
+            nameserver="1.1.1.1",
+            port=853,
+        )
+        if "error" not in result:
+            assert result["header"]["status"] == "NXDOMAIN"
+
+    def test_bad_domain(self):
+        result = dns_query_dot("not valid!", "A", nameserver="1.1.1.1", port=853)
+        assert "error" in result
+
+    def test_bad_nameserver(self):
+        result = dns_query_dot("example.com", "A", nameserver="not-an-ip", port=853)
+        assert "error" in result
+
+    def test_elapsed_ms(self):
+        result = dns_query_dot("example.com", "A", nameserver="1.1.1.1", port=853)
+        assert "error" not in result
+        assert isinstance(result["elapsed_ms"], float)
+        assert result["elapsed_ms"] > 0
 
 
 # ---------------------------------------------------------------------------
