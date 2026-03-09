@@ -78,7 +78,28 @@ DOMAIN_PATTERN = re.compile(
 )
 
 # Allowed DNS record types (security allowlist)
-ALLOWED_TYPES = ["A", "AAAA", "MX", "TXT", "NS", "SOA", "CNAME", "PTR", "SRV"]
+ALLOWED_TYPES = [
+    "A",
+    "AAAA",
+    "MX",
+    "TXT",
+    "NS",
+    "SOA",
+    "CNAME",
+    "PTR",
+    "SRV",
+    "DNSKEY",
+    "DS",
+    "TLSA",
+    "CAA",
+    "SSHFP",
+    "RRSIG",
+    "CDS",
+    "CDNSKEY",
+    "HTTPS",
+    "SVCB",
+    "NAPTR",
+]
 
 # DNS label pattern for DKIM selector validation
 DNS_LABEL_PATTERN = re.compile(r"^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$")
@@ -398,7 +419,26 @@ def reset_stats() -> dict:
 def dns_query(
     domain: str = Field(description="Domain name to query (e.g., 'example.com')"),
     record_type: Literal[
-        "A", "AAAA", "MX", "TXT", "NS", "SOA", "CNAME", "PTR", "SRV"
+        "A",
+        "AAAA",
+        "MX",
+        "TXT",
+        "NS",
+        "SOA",
+        "CNAME",
+        "PTR",
+        "SRV",
+        "DNSKEY",
+        "DS",
+        "TLSA",
+        "CAA",
+        "SSHFP",
+        "RRSIG",
+        "CDS",
+        "CDNSKEY",
+        "HTTPS",
+        "SVCB",
+        "NAPTR",
     ] = "A",
     nameserver: str | None = Field(
         default=None, description="Optional nameserver IP (e.g., '9.9.9.9')"
@@ -410,7 +450,8 @@ def dns_query(
     Performs standard DNS lookups for common record types using the system resolver
     or a specified nameserver. Returns structured results with TTL information.
 
-    Supports: A, AAAA, MX, TXT, NS, SOA, CNAME, PTR, SRV record types.
+    Supports: A, AAAA, MX, TXT, NS, SOA, CNAME, PTR, SRV, DNSKEY, DS, TLSA,
+    CAA, SSHFP, RRSIG, CDS, CDNSKEY, HTTPS, SVCB, NAPTR record types.
     No shell execution - pure Python DNS resolution via dnspython.
     """
     # Validate domain
@@ -509,7 +550,26 @@ def dns_query(
 def dns_dig_style(
     domain: str = Field(description="Domain name to query"),
     record_type: Literal[
-        "A", "AAAA", "MX", "TXT", "NS", "SOA", "CNAME", "PTR", "SRV"
+        "A",
+        "AAAA",
+        "MX",
+        "TXT",
+        "NS",
+        "SOA",
+        "CNAME",
+        "PTR",
+        "SRV",
+        "DNSKEY",
+        "DS",
+        "TLSA",
+        "CAA",
+        "SSHFP",
+        "RRSIG",
+        "CDS",
+        "CDNSKEY",
+        "HTTPS",
+        "SVCB",
+        "NAPTR",
     ] = "A",
     nameserver: str = Field(
         default=DEFAULT_RESOLVER, description="Nameserver to query"
@@ -675,7 +735,26 @@ def _dot_query(
 def dns_query_dot(
     domain: str = Field(description="Domain name to query"),
     record_type: Literal[
-        "A", "AAAA", "MX", "TXT", "NS", "SOA", "CNAME", "PTR", "SRV"
+        "A",
+        "AAAA",
+        "MX",
+        "TXT",
+        "NS",
+        "SOA",
+        "CNAME",
+        "PTR",
+        "SRV",
+        "DNSKEY",
+        "DS",
+        "TLSA",
+        "CAA",
+        "SSHFP",
+        "RRSIG",
+        "CDS",
+        "CDNSKEY",
+        "HTTPS",
+        "SVCB",
+        "NAPTR",
     ] = "A",
     nameserver: str = Field(
         default=DEFAULT_DOT_RESOLVER,
@@ -953,7 +1032,28 @@ def dns_dnssec_validate(
     domain: str = Field(
         description="Domain name to validate (e.g., 'claude.lab.deflationhollow.net')"
     ),
-    record_type: Literal["A", "AAAA", "MX", "TXT", "NS", "SOA", "CNAME"] = "A",
+    record_type: Literal[
+        "A",
+        "AAAA",
+        "MX",
+        "TXT",
+        "NS",
+        "SOA",
+        "CNAME",
+        "PTR",
+        "SRV",
+        "DNSKEY",
+        "DS",
+        "TLSA",
+        "CAA",
+        "SSHFP",
+        "RRSIG",
+        "CDS",
+        "CDNSKEY",
+        "HTTPS",
+        "SVCB",
+        "NAPTR",
+    ] = "A",
     nameserver: str = Field(
         default=DEFAULT_RESOLVER, description="DNSSEC-validating resolver to use"
     ),

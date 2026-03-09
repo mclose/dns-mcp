@@ -133,6 +133,23 @@ class TestDnsQuery:
         result = dns_query("google.com", "A", nameserver="not-an-ip")
         assert "error" in result
 
+    def test_dnskey_record(self):
+        # Use explicit DNSSEC-capable resolver — container's internal resolver SERVFAILs on DNSKEY
+        result = dns_query("cloudflare.com", "DNSKEY", nameserver="9.9.9.9")
+        assert "error" not in result
+        assert result["record_type"] == "DNSKEY"
+        assert len(result["results"]) > 0
+
+    def test_ds_record(self):
+        # DS lives at parent zone; query the .com TLD's DS for a known signed domain
+        result = dns_query("cloudflare.com", "DS", nameserver="9.9.9.9")
+        assert "record_type" in result
+
+    def test_caa_record(self):
+        result = dns_query("google.com", "CAA", nameserver="9.9.9.9")
+        assert "error" not in result
+        assert result["record_type"] == "CAA"
+
 
 # ---------------------------------------------------------------------------
 # dns_dig_style
@@ -177,6 +194,16 @@ class TestDnsDigStyle:
         assert doe["present"] is True
         assert doe["type"] in ("NSEC", "NSEC3")
         assert doe["record_count"] > 0
+
+    def test_dnskey_type(self):
+        result = dns_dig_style("cloudflare.com", "DNSKEY", nameserver="9.9.9.9")
+        assert "error" not in result
+        assert result["query"]["type"] == "DNSKEY"
+
+    def test_caa_type(self):
+        result = dns_dig_style("google.com", "CAA", nameserver="9.9.9.9")
+        assert "error" not in result
+        assert result["query"]["type"] == "CAA"
 
 
 # ---------------------------------------------------------------------------

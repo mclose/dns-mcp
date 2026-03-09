@@ -6,11 +6,10 @@ Working backlog. Items are roughly priority-ordered within each section.
 
 ## Bugs & UX Fixes
 
-- [ ] **Expand record type allowlist** — `dns_query` and `dns_dig_style` are limited to
-  A, AAAA, MX, TXT, NS, SOA, CNAME, PTR, SRV. Missing security-relevant types:
-  DNSKEY, DS, TLSA, CAA, SSHFP, RRSIG, CDS, CDNSKEY, HTTPS, SVCB, NAPTR.
-  Add all to the `Literal[...]` type annotation and `ALLOWED_TYPES` list in both tools.
-  Also update `dns_dnssec_validate` and `nsec_info` record_type params where applicable.
+- [x] **Expand record type allowlist** — `dns_query`, `dns_dig_style`, `dns_query_dot`,
+  and `dns_dnssec_validate` now support 20 types: A, AAAA, MX, TXT, NS, SOA, CNAME,
+  PTR, SRV, DNSKEY, DS, TLSA, CAA, SSHFP, RRSIG, CDS, CDNSKEY, HTTPS, SVCB, NAPTR.
+  `nsec_info` has no record_type param (not applicable).
 
 - [ ] **`check_rbl(ip)` tool** — query common RBLs (Spamhaus zen, SpamCop, SORBS, Barracuda,
   UCEProtect 1/2, Mailspike, PSBL) for a given IPv4/IPv6 address. Reverse the octets,

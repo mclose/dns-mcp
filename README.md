@@ -14,8 +14,8 @@ through any MCP-compatible assistant in real time.
 ### DNS Tools
 | Tool | Description |
 |------|-------------|
-| `dns_query` | Standard DNS lookups (A, AAAA, MX, TXT, NS, SOA, CNAME, PTR, SRV) |
-| `dns_dig_style` | Detailed dig-style output with DNSSEC flags (DO flag set) |
+| `dns_query` | Standard DNS lookups (A, AAAA, MX, TXT, NS, SOA, CNAME, PTR, SRV, DNSKEY, DS, TLSA, CAA, SSHFP, RRSIG, CDS, CDNSKEY, HTTPS, SVCB, NAPTR) |
+| `dns_dig_style` | Detailed dig-style output with DNSSEC flags (DO flag set) — same 20 record types |
 | `dns_query_dot` | DNS over TLS (DoT) query — TLS session info, EDNS pseudosection, DNSSEC flags |
 | `dns_dnssec_validate` | Chain-of-trust validation like `delv +vtrace` |
 | `nsec_info` | NSEC/NSEC3 denial-of-existence analysis and zone walkability assessment |
