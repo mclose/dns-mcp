@@ -35,6 +35,7 @@ through any MCP-compatible assistant in real time.
 | `check_dane` | DANE TLSA record check with DNSSEC validation for a domain's MX hosts |
 | `check_tlsa` | Standalone TLSA record lookup for any hostname, port, and protocol |
 | `rdap_lookup` | Domain registration data via RDAP (modern WHOIS replacement) |
+| `check_rbl` | IP reputation check against 8 DNS-based RBLs (Spamhaus ZEN, SpamCop, UCEProtect L1/L2, Mailspike, PSBL, Barracuda, SORBS) |
 
 ### Utility
 | Tool | Description |
@@ -225,7 +226,7 @@ docker run --rm -i dns-mcp python server.py
   | stdin/stdout (MCP stdio transport)
   v
 FastMCP server (server.py)
-  |  - All 22 tools
+  |  - All 23 tools
   |  - dnspython for DNS queries
   |  - requests for RDAP only
 ```
@@ -269,7 +270,7 @@ make test    # runs pytest inside container
 
 ```
 dns-mcp/
-├── server.py              # FastMCP server (22 tools, stdio transport)
+├── server.py              # FastMCP server (23 tools, stdio transport)
 ├── Dockerfile             # Single-stage Alpine image
 ├── docker-compose.yml     # Build target
 ├── Makefile               # build/test/shell

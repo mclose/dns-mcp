@@ -33,6 +33,7 @@ Tools provided:
   - check_dane: DANE TLSA record check for mail server authentication
   - rdap_lookup: Domain registration data via RDAP (HTTP, not DNS)
   - detect_hijacking: DNS hijacking and tampering detection for a resolver IP
+  - check_rbl: IP reputation check against 8 DNS-based RBLs (Spamhaus, SpamCop, SORBS, etc.)
 """
 
 from fastmcp import FastMCP
@@ -52,6 +53,7 @@ import dns.name
 import dns.rrset
 from datetime import datetime, timezone
 from typing import Literal
+import os
 import re
 import secrets
 import ipaddress
@@ -95,6 +97,104 @@ DEFAULT_RESOLVER = "9.9.9.9"
 # with --dns 9.9.9.9, it installs NAT rules that interfere with TCP port 853
 # connections back to the same IP, causing "Connection reset by peer".
 DEFAULT_DOT_RESOLVER = "1.1.1.1"
+
+# Spamhaus Data Query Service key (optional — enables production-grade DQS zone).
+# Without it, zen.spamhaus.org is used (works for low-volume analyst use).
+# Set via: docker run -e SPAMHAUS_DQS_KEY=yourkey ...
+SPAMHAUS_DQS_KEY = os.getenv("SPAMHAUS_DQS_KEY")
+
+# RBL zone definitions — queried in order for check_rbl().
+# Each entry: name, zone (FQDN suffix), codes (return code → description),
+# positive_codes (set of codes that indicate good reputation, not a listing).
+_RBL_LIST = [
+    {
+        "name": "Spamhaus ZEN",
+        "zone": (
+            f"{SPAMHAUS_DQS_KEY}.zen.dq.spamhaus.net"
+            if SPAMHAUS_DQS_KEY
+            else "zen.spamhaus.org"
+        ),
+        "codes": {
+            "127.0.0.2": "SBL — direct spam source",
+            "127.0.0.3": "SBL CSS — spam support services",
+            "127.0.0.4": "XBL — exploited/compromised host",
+            "127.0.0.5": "XBL — exploited/compromised host",
+            "127.0.0.6": "XBL — exploited/compromised host",
+            "127.0.0.7": "XBL — exploited/compromised host",
+            "127.0.0.9": "DROP — do not route or peer",
+            "127.0.0.10": "PBL — ISP policy block (dynamic/end-user IP)",
+            "127.0.0.11": "PBL — Spamhaus maintained policy block",
+        },
+        "positive_codes": set(),
+    },
+    {
+        "name": "SpamCop",
+        "zone": "bl.spamcop.net",
+        "codes": {"127.0.0.2": "Listed — spam source"},
+        "positive_codes": set(),
+    },
+    {
+        "name": "UCEProtect L1",
+        "zone": "dnsbl-1.uceprotect.net",
+        "codes": {"127.0.0.2": "Listed — direct spam source"},
+        "positive_codes": set(),
+    },
+    {
+        "name": "UCEProtect L2",
+        "zone": "dnsbl-2.uceprotect.net",
+        "codes": {"127.0.0.2": "Listed — netblock contains spam sources"},
+        "positive_codes": set(),
+    },
+    {
+        "name": "Mailspike",
+        "zone": "bl.mailspike.net",
+        "codes": {
+            "127.0.0.2": "Listed — spam source",
+            "127.0.0.3": "Listed — poor reputation",
+            "127.0.0.4": "Listed — very poor reputation",
+            "127.0.0.5": "Listed — worst reputation",
+            "127.0.0.10": "Reputation — excellent sender",
+            "127.0.0.11": "Reputation — good sender",
+            "127.0.0.12": "Reputation — good sender",
+            "127.0.0.13": "Reputation — neutral/ham",
+            "127.0.0.14": "Reputation — neutral/ham",
+        },
+        "positive_codes": {
+            "127.0.0.10",
+            "127.0.0.11",
+            "127.0.0.12",
+            "127.0.0.13",
+            "127.0.0.14",
+        },
+    },
+    {
+        "name": "PSBL",
+        "zone": "psbl.surriel.com",
+        "codes": {"127.0.0.2": "Listed — passive spam source"},
+        "positive_codes": set(),
+    },
+    {
+        "name": "Barracuda",
+        "zone": "b.barracudacentral.org",
+        "codes": {"127.0.0.2": "Listed — spam source"},
+        "positive_codes": set(),
+    },
+    {
+        "name": "SORBS",
+        "zone": "dnsbl.sorbs.net",
+        "codes": {
+            "127.0.0.2": "HTTP open proxy",
+            "127.0.0.3": "SOCKS open proxy",
+            "127.0.0.4": "Miscellaneous open proxy",
+            "127.0.0.5": "SMTP open relay",
+            "127.0.0.6": "Spam source",
+            "127.0.0.7": "Web form spam",
+            "127.0.0.8": "DUL — dynamic/end-user IP",
+            "127.0.0.10": "Escalated — listed in multiple SORBS zones",
+        },
+        "positive_codes": set(),
+    },
+]
 
 # Hardcoded RDAP fallbacks for common TLDs
 _RDAP_FALLBACKS = {
@@ -2755,6 +2855,7 @@ def _print_startup_banner(transport: str):
         ("check_dane", "DANE TLSA + DNSSEC mail server authentication"),
         ("dns_dig_style", "Dig-style output with DNSSEC flags + DoE"),
         ("detect_hijacking", "DNS hijacking & tampering detection"),
+        ("check_rbl", "IP reputation across 8 DNS-based RBLs"),
         ("quine", "The server reads its own source code"),
     ]
 
@@ -2774,7 +2875,7 @@ def _print_startup_banner(transport: str):
             line("   🔍  d n s - m c p", 1),
             empty,
             line("   DNS & Domain Security Analysis Server"),
-            line(f"   22 tools · DNSSEC · MCP · {transport}"),
+            line(f"   23 tools · DNSSEC · MCP · {transport}"),
             empty,
             line(f"   ✨ Spotlight: {tool}", 1),
             line(f"      {desc}"),
@@ -2785,6 +2886,158 @@ def _print_startup_banner(transport: str):
     )
 
     print(banner, file=sys.stderr)
+
+
+# ---------------------------------------------------------------------------
+# check_rbl
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+@track("check_rbl")
+def check_rbl(
+    ip_address: str = Field(
+        description="IPv4 or IPv6 address to check against DNS-based RBLs"
+    ),
+    nameserver: str = DEFAULT_RESOLVER,
+) -> dict:
+    """
+    Check an IP address against 8 DNS-based Real-time Blackhole Lists (RBLs).
+
+    Uses the standard DNS lookup method: reverses the IP octets (IPv4) or nibbles
+    (IPv6), appends the RBL zone, and queries for A + TXT records. An A record
+    answer means the IP is listed; the return code identifies the listing type.
+
+    RBLs queried (in order):
+      Spamhaus ZEN, SpamCop, UCEProtect L1, UCEProtect L2, Mailspike,
+      PSBL, Barracuda, SORBS
+
+    Spamhaus ZEN uses zen.spamhaus.org by default (low-volume analyst use).
+    Set the SPAMHAUS_DQS_KEY env var to enable production DQS queries.
+
+    SORBS may timeout occasionally — handled gracefully with per-RBL error
+    capture so a slow zone never blocks the rest of the results.
+
+    Mailspike returns positive reputation codes (127.0.0.10–14) for known-good
+    senders — these are reported with listed=false and a reputation description.
+    """
+    try:
+        ip = ipaddress.ip_address(ip_address)
+    except ValueError:
+        return {"error": "Invalid IP address format", "ip_address": ip_address}
+
+    try:
+        ipaddress.ip_address(nameserver)
+    except ValueError:
+        return {"error": "Invalid nameserver IP address", "ip_address": ip_address}
+
+    errors = []
+
+    is_private = ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved
+    if is_private:
+        errors.append(
+            f"{ip_address} is a private/reserved address — RBL results will be meaningless"
+        )
+
+    # Build reversed IP string for RBL zone suffix
+    if ip.version == 4:
+        reversed_ip = ".".join(reversed(str(ip).split(".")))
+    else:
+        expanded = ip.exploded.replace(":", "")  # 32 hex nibbles, no colons
+        reversed_ip = ".".join(reversed(expanded))
+
+    resolver = dns.resolver.Resolver()
+    resolver.nameservers = [nameserver]
+    resolver.lifetime = 5.0
+
+    results = []
+    listed_count = 0
+    clean_count = 0
+    error_count = 0
+
+    for rbl in _RBL_LIST:
+        zone = rbl["zone"]
+        fqdn = f"{reversed_ip}.{zone}"
+        codes_map = rbl["codes"]
+        positive_codes = rbl["positive_codes"]
+
+        entry: dict = {
+            "rbl": rbl["name"],
+            "zone_queried": fqdn,
+            "listed": False,
+            "return_codes": [],
+            "listing_types": [],
+            "explanation": None,
+            "error": None,
+        }
+
+        try:
+            a_answers = resolver.resolve(fqdn, "A")
+            return_codes = [str(rdata) for rdata in a_answers]
+            entry["return_codes"] = return_codes
+
+            listing_types = []
+            is_positive_only = True
+            for code in return_codes:
+                listing_types.append(codes_map.get(code, f"Unknown return code {code}"))
+                if code not in positive_codes:
+                    is_positive_only = False
+
+            entry["listing_types"] = listing_types
+            entry["listed"] = not is_positive_only
+
+            if entry["listed"]:
+                listed_count += 1
+            else:
+                clean_count += 1
+
+            # TXT is informational — failure is non-fatal
+            try:
+                txt_answers = resolver.resolve(fqdn, "TXT")
+                txts = []
+                for rdata in txt_answers:
+                    txts.append(
+                        " ".join(
+                            s.decode() if isinstance(s, bytes) else s
+                            for s in rdata.strings
+                        )
+                    )
+                entry["explanation"] = "; ".join(txts)
+            except Exception:
+                pass
+
+        except dns.resolver.NXDOMAIN:
+            clean_count += 1
+        except dns.resolver.NoAnswer:
+            clean_count += 1
+        except dns.exception.Timeout:
+            error_count += 1
+            entry["error"] = "timeout"
+            errors.append(f"{rbl['name']} ({zone}): query timed out")
+        except dns.resolver.NoNameservers:
+            error_count += 1
+            entry["error"] = "no nameservers"
+            errors.append(f"{rbl['name']} ({zone}): no nameservers available")
+        except Exception as exc:
+            error_count += 1
+            entry["error"] = str(exc)
+            errors.append(f"{rbl['name']} ({zone}): {exc}")
+
+        results.append(entry)
+
+    return {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "ip_address": ip_address,
+        "ip_version": ip.version,
+        "is_private": is_private,
+        "reversed_ip": reversed_ip,
+        "spamhaus_dqs": bool(SPAMHAUS_DQS_KEY),
+        "listed_count": listed_count,
+        "clean_count": clean_count,
+        "error_count": error_count,
+        "results": results,
+        "errors": errors,
+    }
 
 
 # ---------------------------------------------------------------------------

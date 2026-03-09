@@ -36,6 +36,7 @@ from server import (
     rdap_lookup,
     check_dane,
     check_tlsa,
+    check_rbl,
     detect_hijacking,
     session_stats,
     reset_stats,
@@ -1663,3 +1664,84 @@ class TestPrompts:
         assert "phishing" in result.lower()
         assert "DKIM" in result
         assert "TRUSTABLE" in result
+
+
+# ---------------------------------------------------------------------------
+# check_rbl
+# ---------------------------------------------------------------------------
+
+
+class TestCheckRbl:
+    def test_known_clean_ip(self):
+        """8.8.8.8 (Google DNS) should be clean on all major RBLs"""
+        result = check_rbl(ip_address="8.8.8.8", nameserver="9.9.9.9")
+        assert "error" not in result
+        assert result["ip_address"] == "8.8.8.8"
+        assert result["ip_version"] == 4
+        assert result["is_private"] is False
+        assert result["reversed_ip"] == "8.8.8.8"
+        assert result["listed_count"] == 0
+
+    def test_response_structure(self):
+        result = check_rbl(ip_address="8.8.8.8", nameserver="9.9.9.9")
+        for key in (
+            "timestamp",
+            "ip_address",
+            "ip_version",
+            "is_private",
+            "reversed_ip",
+            "spamhaus_dqs",
+            "listed_count",
+            "clean_count",
+            "error_count",
+            "results",
+            "errors",
+        ):
+            assert key in result, f"Missing key: {key}"
+
+    def test_result_entry_structure(self):
+        result = check_rbl(ip_address="8.8.8.8", nameserver="9.9.9.9")
+        assert len(result["results"]) == 8  # one entry per RBL
+        entry = result["results"][0]
+        for key in (
+            "rbl",
+            "zone_queried",
+            "listed",
+            "return_codes",
+            "listing_types",
+            "explanation",
+            "error",
+        ):
+            assert key in entry, f"Missing key in result entry: {key}"
+
+    def test_ipv4_reversal(self):
+        result = check_rbl(ip_address="1.2.3.4", nameserver="9.9.9.9")
+        assert result["reversed_ip"] == "4.3.2.1"
+
+    def test_ipv6_reversal(self):
+        # 2001:0db8:0000:0000:0000:0000:0000:0001 nibbles reversed
+        result = check_rbl(ip_address="2001:db8::1", nameserver="9.9.9.9")
+        assert result["reversed_ip"] == (
+            "1.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.8.b.d.0.1.0.0.2"
+        )
+        assert result["ip_version"] == 6
+
+    def test_private_ip_warning(self):
+        result = check_rbl(ip_address="192.168.1.1", nameserver="9.9.9.9")
+        assert result["is_private"] is True
+        assert any(
+            "private" in e.lower() or "reserved" in e.lower() for e in result["errors"]
+        )
+
+    def test_invalid_ip(self):
+        result = check_rbl(ip_address="not-an-ip", nameserver="9.9.9.9")
+        assert "error" in result
+
+    def test_invalid_nameserver(self):
+        result = check_rbl(ip_address="8.8.8.8", nameserver="not-an-ip")
+        assert "error" in result
+
+    def test_spamhaus_dqs_flag(self):
+        """spamhaus_dqs reflects whether a DQS key is configured"""
+        result = check_rbl(ip_address="8.8.8.8", nameserver="9.9.9.9")
+        assert isinstance(result["spamhaus_dqs"], bool)
