@@ -1087,11 +1087,14 @@ def dns_dnssec_validate(
     validation_chain = []
     target_name = dns.name.from_text(domain)
 
-    # Build the list of zones to validate (from target's parent zone up to root)
-    # We don't include the target itself since it's a hostname, not a zone
-    # The zone containing the target record is target_name.parent()
+    # Build the list of zones to validate (from target down up to root).
+    # Include target_name itself — it may be a zone apex with its own DS/DNSKEY
+    # (e.g. validating deflationhollow.net/A requires walking the
+    # deflationhollow.net zone, not just its parent net.).
+    # For hostnames inside a zone (www.example.com), the intermediate name
+    # has no DS/DNSKEY and the loop skips it gracefully.
     zones = []
-    current = target_name.parent()  # Start from parent (the zone containing target)
+    current = target_name  # Start from target (include zone apex if applicable)
     while current != dns.name.root:
         zones.append(current)
         current = current.parent()

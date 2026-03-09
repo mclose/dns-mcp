@@ -559,6 +559,12 @@ class TestDnssecValidate:
         result = dns_dnssec_validate("cloudflare.com", "A", nameserver="bad")
         assert "error" in result
 
+    def test_zone_apex_validates_secure(self):
+        """Zone apex query (deflationhollow.net) must walk its own DS/DNSKEY step"""
+        result = dns_dnssec_validate("deflationhollow.net", "A", nameserver="9.9.9.9")
+        assert "error" not in result
+        assert result["overall_status"] == "fully validated"
+
 
 # ===========================================================================
 # Phase 2: Helper functions
