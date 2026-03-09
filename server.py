@@ -772,48 +772,79 @@ def timestamp_converter(
 @mcp.tool()
 @track("reverse_dns")
 def reverse_dns(
-    ip_address: str = Field(description="IP address for reverse DNS lookup"),
+    ip_address: str = Field(description="IPv4 or IPv6 address for reverse DNS lookup"),
+    nameserver: str = DEFAULT_RESOLVER,
 ) -> dict:
     """
-    Perform reverse DNS lookup (PTR record) for an IP address.
+    Perform reverse DNS (PTR) lookup for an IP address, with forward-confirmed rDNS
+    (FCrDNS) verification.
 
-    Converts the IP address to its reverse DNS name (in-addr.arpa for IPv4,
-    ip6.arpa for IPv6) and queries for PTR records.
-
-    Useful for finding the hostname associated with an IP address.
+    Converts the IP to its in-addr.arpa / ip6.arpa name, queries PTR records, then
+    resolves each PTR hostname forward (A + AAAA) to confirm it maps back to the
+    original IP. FCrDNS pass is required for trustworthy mail server identity.
     """
     try:
-        import ipaddress
-
-        # Validate IP address
         ip = ipaddress.ip_address(ip_address)
-
-        # Create reverse DNS name
-        reverse_name = dns.reversename.from_address(str(ip))
-
-        # Query PTR record
-        resolver = dns.resolver.Resolver()
-        answers = resolver.resolve(reverse_name, "PTR")
-
-        results = [str(rdata) for rdata in answers]
-
-        return {
-            "ip_address": ip_address,
-            "reverse_dns_name": str(reverse_name),
-            "ptr_records": results,
-            "ttl": answers.rrset.ttl,
-            "query_time": datetime.now(timezone.utc).isoformat(),
-        }
-
     except ValueError:
         return {"error": "Invalid IP address format", "ip_address": ip_address}
+
+    try:
+        ipaddress.ip_address(nameserver)
+    except ValueError:
+        return {"error": "Invalid nameserver IP address", "ip_address": ip_address}
+
+    reverse_name = dns.reversename.from_address(str(ip))
+    errors = []
+
+    # PTR lookup
+    resolver = dns.resolver.Resolver()
+    resolver.nameservers = [nameserver]
+    ptr_records = []
+    ttl = None
+    try:
+        answers = resolver.resolve(reverse_name, "PTR")
+        ptr_records = [str(rdata) for rdata in answers]
+        ttl = answers.rrset.ttl
     except dns.resolver.NXDOMAIN:
-        return {"error": "No PTR record found (NXDOMAIN)", "ip_address": ip_address}
-    except Exception as e:
-        return {
-            "error": f"Reverse DNS lookup failed: {str(e)}",
-            "ip_address": ip_address,
-        }
+        errors.append(f"No PTR record found for {ip_address} (NXDOMAIN)")
+    except dns.resolver.NoAnswer:
+        errors.append(f"No PTR record in answer for {ip_address}")
+    except dns.resolver.NoNameservers:
+        errors.append("No nameservers available for PTR query")
+    except dns.exception.Timeout:
+        errors.append("PTR query timed out")
+
+    # FCrDNS: resolve each PTR hostname forward and verify original IP is in results
+    fcrDNS_checks = []
+    fcrDNS_pass = False
+    for hostname in ptr_records:
+        forward_ips = []
+        for rtype in ("A", "AAAA"):
+            try:
+                fwd_answers = resolver.resolve(hostname.rstrip("."), rtype)
+                forward_ips.extend(str(rdata) for rdata in fwd_answers)
+            except Exception:
+                pass
+        matches = str(ip) in forward_ips
+        if matches:
+            fcrDNS_pass = True
+        fcrDNS_checks.append(
+            {"hostname": hostname, "forward_ips": forward_ips, "matches": matches}
+        )
+
+    return {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "ip_address": ip_address,
+        "reverse_name": str(reverse_name),
+        "ptr_records": ptr_records,
+        "ttl": ttl,
+        "fcrDNS": {
+            "pass": fcrDNS_pass,
+            "checks": fcrDNS_checks,
+        },
+        "nameserver": nameserver,
+        "errors": errors,
+    }
 
 
 @mcp.tool()

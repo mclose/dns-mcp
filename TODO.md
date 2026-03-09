@@ -11,9 +11,9 @@ Working backlog. Items are roughly priority-ordered within each section.
   query `{reversed}.{rbl}` for an A record. Return per-RBL listed/clean status and any
   returned TXT explanation records. Currently requires manual scripting outside dns-mcp.
 
-- [ ] **`ptr_lookup(ip)` tool** — reverse DNS lookup for an IP address. Returns PTR record(s)
-  and whether forward-confirmed rDNS (FCrDNS) passes (PTR → A resolves back to the original IP).
-  Essential for verifying mail server identity; currently absent from the toolset.
+- [x] **`ptr_lookup(ip)` / `reverse_dns` enhanced** — added FCrDNS verification, `nameserver`
+  param, structured NXDOMAIN handling, and standard `timestamp`/`errors` fields to the
+  existing `reverse_dns` tool rather than adding a redundant alias.
 
 - [x] **`check_dkim_selector` arg order** — swapped to `(domain, selector)` to match
   every other tool's `domain`-first convention. Tests updated. Was a silent wrong-result

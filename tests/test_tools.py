@@ -438,25 +438,60 @@ class TestTimestampConverter:
 
 
 class TestReverseDns:
-    def test_known_good_ip(self):
-        result = reverse_dns(ip_address="8.8.8.8")
+    def test_known_good_ipv4(self):
+        result = reverse_dns(ip_address="8.8.8.8", nameserver="9.9.9.9")
         assert "error" not in result
         assert result["ip_address"] == "8.8.8.8"
         assert len(result["ptr_records"]) > 0
         assert "dns.google" in result["ptr_records"][0].lower()
 
+    def test_fcrDNS_pass(self):
+        """8.8.8.8 → dns.google → resolves back to 8.8.8.8 → FCrDNS passes"""
+        result = reverse_dns(ip_address="8.8.8.8", nameserver="9.9.9.9")
+        assert "fcrDNS" in result
+        assert result["fcrDNS"]["pass"] is True
+        assert len(result["fcrDNS"]["checks"]) > 0
+        check = result["fcrDNS"]["checks"][0]
+        assert "hostname" in check
+        assert "forward_ips" in check
+        assert "matches" in check
+
+    def test_response_structure(self):
+        result = reverse_dns(ip_address="8.8.8.8", nameserver="9.9.9.9")
+        for key in (
+            "timestamp",
+            "ip_address",
+            "reverse_name",
+            "ptr_records",
+            "ttl",
+            "fcrDNS",
+            "nameserver",
+            "errors",
+        ):
+            assert key in result, f"Missing key: {key}"
+
+    def test_nxdomain_no_ptr(self):
+        """IP with no PTR record returns structured result, not hard error"""
+        result = reverse_dns(ip_address="192.0.2.1", nameserver="9.9.9.9")
+        assert "error" not in result
+        assert result["ptr_records"] == []
+        assert len(result["errors"]) > 0
+        assert result["fcrDNS"]["pass"] is False
+
     def test_invalid_ip(self):
-        result = reverse_dns(ip_address="not-an-ip")
+        result = reverse_dns(ip_address="not-an-ip", nameserver="9.9.9.9")
         assert "error" in result
 
     def test_empty_string(self):
-        result = reverse_dns(ip_address="")
+        result = reverse_dns(ip_address="", nameserver="9.9.9.9")
+        assert "error" in result
+
+    def test_invalid_nameserver(self):
+        result = reverse_dns(ip_address="8.8.8.8", nameserver="not-an-ip")
         assert "error" in result
 
     def test_ipv6(self):
-        # Google public DNS IPv6
-        result = reverse_dns(ip_address="2001:4860:4860::8888")
-        # May or may not have PTR, but shouldn't crash
+        result = reverse_dns(ip_address="2001:4860:4860::8888", nameserver="9.9.9.9")
         assert "ip_address" in result or "error" in result
 
 
