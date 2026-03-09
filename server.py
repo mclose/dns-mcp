@@ -581,7 +581,7 @@ def dns_query_dot(
         default=DEFAULT_DOT_RESOLVER,
         description=f"Resolver IP supporting DoT on port 853 (default: {DEFAULT_DOT_RESOLVER})",
     ),
-    port: int = Field(default=853, description="DoT port (default: 853)"),
+    port: int = 853,
 ) -> dict:
     """
     Perform a DNS over TLS (DoT) query showing full response details.
@@ -1433,11 +1433,11 @@ def check_dmarc(
 @mcp.tool()
 @track("check_dkim_selector")
 def check_dkim_selector(
-    selector: str = Field(
-        description="DKIM selector (s= value from DKIM-Signature header)"
-    ),
     domain: str = Field(
         description="DKIM domain (d= value from DKIM-Signature header)"
+    ),
+    selector: str = Field(
+        description="DKIM selector (s= value from DKIM-Signature header)"
     ),
 ) -> dict:
     """
@@ -1504,9 +1504,7 @@ def check_dkim_selector(
 @track("check_bimi")
 def check_bimi(
     domain: str = Field(description="Domain to check BIMI record for"),
-    selector: str = Field(
-        default="default", description="BIMI selector (almost always 'default')"
-    ),
+    selector: str = "default",
 ) -> dict:
     """
     Check for BIMI (Brand Indicators for Message Identification) record.

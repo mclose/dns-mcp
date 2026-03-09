@@ -4,6 +4,27 @@ Working backlog. Items are roughly priority-ordered within each section.
 
 ---
 
+## Bugs & UX Fixes
+
+- [ ] **`check_rbl(ip)` tool** — query common RBLs (Spamhaus zen, SpamCop, SORBS, Barracuda,
+  UCEProtect 1/2, Mailspike, PSBL) for a given IPv4/IPv6 address. Reverse the octets,
+  query `{reversed}.{rbl}` for an A record. Return per-RBL listed/clean status and any
+  returned TXT explanation records. Currently requires manual scripting outside dns-mcp.
+
+- [ ] **`ptr_lookup(ip)` tool** — reverse DNS lookup for an IP address. Returns PTR record(s)
+  and whether forward-confirmed rDNS (FCrDNS) passes (PTR → A resolves back to the original IP).
+  Essential for verifying mail server identity; currently absent from the toolset.
+
+- [x] **`check_dkim_selector` arg order** — swapped to `(domain, selector)` to match
+  every other tool's `domain`-first convention. Tests updated. Was a silent wrong-result
+  bug (args swapped, no error raised, wrong FQDN queried).
+
+- [x] **Pydantic `Field(default=...)` breaks direct function calls** — fixed `check_bimi`
+  `selector` and `dns_query_dot` `port` to use plain Python defaults instead of
+  `Field(default=...)`. `Field(...)` now reserved for required params only.
+
+---
+
 ## Scripts
 
 - [ ] `tools/soc_email_forensics.sh` — wrap the `soc_email_forensics` MCP prompt;

@@ -763,7 +763,7 @@ class TestCheckDkimSelector:
     def test_known_good_selector(self):
         """Google publishes DKIM keys at well-known selectors"""
         # Google uses selectors like "20230601" — try a known pattern
-        result = check_dkim_selector("20230601", "gmail.com")
+        result = check_dkim_selector("gmail.com", "20230601")
         # Record may or may not exist depending on rotation, check structure
         assert result["selector"] == "20230601"
         assert result["domain"] == "gmail.com"
@@ -773,34 +773,34 @@ class TestCheckDkimSelector:
 
     def test_no_record(self):
         """Non-existent selector should return record_exists=False"""
-        result = check_dkim_selector("nonexistent99", "google.com")
+        result = check_dkim_selector("google.com", "nonexistent99")
         assert result["record_exists"] is False
         assert result["key_present"] is False
         assert len(result["errors"]) > 0
 
     def test_nxdomain(self):
         result = check_dkim_selector(
-            "selector1", "this-domain-does-not-exist-xyzzy.invalid"
+            "this-domain-does-not-exist-xyzzy.invalid", "selector1"
         )
         assert result["record_exists"] is False
         assert len(result["errors"]) > 0
 
     def test_invalid_selector_chars(self):
         """Selector with special chars should fail validation"""
-        result = check_dkim_selector("bad selector!", "google.com")
+        result = check_dkim_selector("google.com", "bad selector!")
         assert "error" in result
 
     def test_empty_selector(self):
-        result = check_dkim_selector("", "google.com")
+        result = check_dkim_selector("google.com", "")
         assert "error" in result
 
     def test_invalid_domain(self):
-        result = check_dkim_selector("selector1", "not valid!")
+        result = check_dkim_selector("not valid!", "selector1")
         assert "error" in result
 
     def test_response_structure_found(self):
         """Check all expected keys on any DKIM lookup"""
-        result = check_dkim_selector("selector1", "google.com")
+        result = check_dkim_selector("google.com", "selector1")
         for key in [
             "timestamp",
             "selector",
