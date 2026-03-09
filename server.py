@@ -1066,12 +1066,9 @@ def dns_dnssec_validate(
     step in the chain validates successfully.
 
     This tool reconstructs the chain manually (educational "show your work"
-    output). If overall_status is "bogus", always cross-check with a
-    production DNSSEC validator before acting:
-      - dns_dig_style: AD=true means Quad9 (a production validator) accepts it
-      - Command line: delv +vtrace <domain>
-    A discrepancy (tool says bogus, delv/AD say secure) indicates a tool
-    limitation, not a real DNS problem.
+    output) and cross-checks its verdict against the resolver's AD flag on
+    the same query. If the two disagree, a "discrepancy" field explains which
+    to trust and suggests `delv +vtrace <domain>` for final confirmation.
 
     Returns:
     - Chain of trust from root to target domain
@@ -1302,9 +1299,11 @@ def dns_dnssec_validate(
             "validations": [],
         }
 
+        resolver_ad_flag = None  # AD flag from the resolver on the target query
         try:
             target_query = dns.message.make_query(domain, record_type, want_dnssec=True)
             target_response = dns.query.udp(target_query, nameserver, timeout=5.0)
+            resolver_ad_flag = bool(target_response.flags & dns.flags.AD)
 
             target_rrset = None
             target_rrsig = None
@@ -1393,22 +1392,41 @@ def dns_dnssec_validate(
         else:
             overall_status = "insecure"
 
+        # Cross-check: compare our chain-walk verdict against the resolver's AD flag.
+        # AD=true means the nameserver (a production DNSSEC validator) accepted the chain.
+        # Disagreement between the two is a strong signal one way or the other.
+        chain_says_valid = overall_status == "fully validated"
+
+        if resolver_ad_flag is not None and chain_says_valid != resolver_ad_flag:
+            if chain_says_valid and not resolver_ad_flag:
+                discrepancy = (
+                    f"DISCREPANCY: this tool's chain walk says fully validated, "
+                    f"but {nameserver} did not set AD=true on the response. "
+                    f"The resolver's judgment takes precedence — treat as unvalidated. "
+                    f"Run `delv +vtrace {domain}` to investigate."
+                )
+            else:  # chain says bogus/insecure, resolver says AD=true
+                discrepancy = (
+                    f"DISCREPANCY: this tool's chain walk says {overall_status}, "
+                    f"but {nameserver} set AD=true — the resolver accepted the chain. "
+                    f"This is likely a tool limitation, not a real DNS problem. "
+                    f"Confirm with `delv +vtrace {domain}` before acting."
+                )
+        else:
+            discrepancy = None
+
         result = {
             "domain": domain,
             "record_type": record_type,
             "nameserver": nameserver,
             "overall_status": overall_status,
+            "resolver_ad_flag": resolver_ad_flag,
             "chain_of_trust": validation_chain,
             "query_time": datetime.now(timezone.utc).isoformat(),
         }
 
-        if overall_status == "bogus":
-            result["verify_with"] = (
-                "Cross-check before acting: run dns_dig_style to see if a "
-                "production validator sets AD=true, or run `delv +vtrace "
-                f"{domain}` on the command line. A discrepancy means a tool "
-                "limitation, not a real DNS problem."
-            )
+        if discrepancy:
+            result["discrepancy"] = discrepancy
 
         return result
 
