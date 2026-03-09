@@ -1673,14 +1673,19 @@ class TestPrompts:
 
 class TestCheckRbl:
     def test_known_clean_ip(self):
-        """8.8.8.8 (Google DNS) should be clean on all major RBLs"""
+        """8.8.8.8 (Google DNS) — check structure; don't assert listed_count==0
+        since RBL listings are live data and can vary across networks/environments."""
         result = check_rbl(ip_address="8.8.8.8", nameserver="9.9.9.9")
         assert "error" not in result
         assert result["ip_address"] == "8.8.8.8"
         assert result["ip_version"] == 4
         assert result["is_private"] is False
         assert result["reversed_ip"] == "8.8.8.8"
-        assert result["listed_count"] == 0
+        assert isinstance(result["listed_count"], int)
+        assert isinstance(result["clean_count"], int)
+        assert (
+            result["listed_count"] + result["clean_count"] + result["error_count"] == 8
+        )
 
     def test_response_structure(self):
         result = check_rbl(ip_address="8.8.8.8", nameserver="9.9.9.9")
