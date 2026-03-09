@@ -42,6 +42,15 @@ Working backlog. Items are roughly priority-ordered within each section.
 
 ## Infrastructure
 
+- [ ] **`libunbound` Python bindings for `dns_dnssec_validate`** — replace the manual
+  DS/DNSKEY chain walk with a call to `libunbound` (production DNSSEC-validating
+  resolver, same engine used by real resolvers). Would make the chain verdict
+  authoritative rather than reconstructed, eliminating the class of false-positive
+  fixed in the zone-apex bug. Dependency: `unbound` Alpine package (~5MB).
+  Current AD-flag cross-check is a reasonable stopgap until then.
+
+
+
 - [x] **Logging** — per-tool invocation + result lines to stderr via `tracking.py`.
   Format: `[TOOL] → check_spf domain=example.com` / `[TOOL] ← check_spf ok (reject) 142ms`.
   Status: ok / ERR (soft error dict) / EXCEPTION. Summary from well-known result keys
