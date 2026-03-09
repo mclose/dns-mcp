@@ -19,7 +19,7 @@ through any MCP-compatible assistant in real time.
 | `dns_query_dot` | DNS over TLS (DoT) query — TLS session info, EDNS pseudosection, DNSSEC flags |
 | `dns_dnssec_validate` | Chain-of-trust validation like `delv +vtrace` |
 | `nsec_info` | NSEC/NSEC3 denial-of-existence analysis and zone walkability assessment |
-| `reverse_dns` | PTR record lookups for IP addresses |
+| `reverse_dns` | PTR lookup + forward-confirmed rDNS (FCrDNS) verification — essential for mail server identity |
 | `timestamp_converter` | Convert between ISO, epoch, and human-readable timestamps |
 | `detect_hijacking` | Test a resolver for DNS hijacking/tampering (NXDOMAIN probe, known record, DNSSEC, identity) |
 
