@@ -1401,16 +1401,22 @@ def dns_dnssec_validate(
             if chain_says_valid and not resolver_ad_flag:
                 discrepancy = (
                     f"DISCREPANCY: this tool's chain walk says fully validated, "
-                    f"but {nameserver} did not set AD=true on the response. "
+                    f"but {nameserver} did not set the AD (Authenticated Data) flag — "
+                    f"meaning the resolver did not confirm the DNSSEC chain. "
                     f"The resolver's judgment takes precedence — treat as unvalidated. "
-                    f"Run `delv +vtrace {domain}` to investigate."
+                    f"To confirm: `dig +dnssec {record_type} {domain} @{nameserver}` "
+                    f"and look for 'ad' in the flags line of the header. "
+                    f"For a full trace: `delv +vtrace {domain}`"
                 )
             else:  # chain says bogus/insecure, resolver says AD=true
                 discrepancy = (
                     f"DISCREPANCY: this tool's chain walk says {overall_status}, "
-                    f"but {nameserver} set AD=true — the resolver accepted the chain. "
+                    f"but {nameserver} set the AD (Authenticated Data) flag — "
+                    f"meaning the resolver validated the DNSSEC chain successfully. "
                     f"This is likely a tool limitation, not a real DNS problem. "
-                    f"Confirm with `delv +vtrace {domain}` before acting."
+                    f"To confirm: `dig +dnssec {record_type} {domain} @{nameserver}` "
+                    f"and look for 'ad' in the flags line of the header. "
+                    f"For a full trace: `delv +vtrace {domain}`"
                 )
         else:
             discrepancy = None
