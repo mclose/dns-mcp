@@ -147,6 +147,22 @@ _RBL_LIST = [
             "127.0.0.11": "PBL — Spamhaus maintained policy block",
         },
         "positive_codes": set(),
+        # Spamhaus returns these administrative codes when queries are rate-limited
+        # or blocked — they must not be treated as IP listings.
+        "quota_codes": {
+            "127.255.255.252": (
+                "Resolver not allowlisted by Spamhaus — set SPAMHAUS_DQS_KEY "
+                "or use a resolver with a Spamhaus agreement"
+            ),
+            "127.255.255.254": (
+                "Query limit exceeded on zen.spamhaus.org — set SPAMHAUS_DQS_KEY "
+                "for unrestricted access via the DQS zone"
+            ),
+            "127.255.255.255": (
+                "Source blocked by Spamhaus — set SPAMHAUS_DQS_KEY "
+                "for unrestricted access via the DQS zone"
+            ),
+        },
     },
     {
         "name": "SpamCop",
@@ -3120,6 +3136,18 @@ def check_rbl(
             a_answers = resolver.resolve(fqdn, "A")
             return_codes = [str(rdata) for rdata in a_answers]
             entry["return_codes"] = return_codes
+
+            # Check for administrative quota/block codes before treating as a listing.
+            # Spamhaus returns 127.255.255.x when queries are rate-limited or blocked;
+            # these must not be counted as IP listings (would be a false positive).
+            quota_codes = rbl.get("quota_codes", {})
+            quota_hits = [c for c in return_codes if c in quota_codes]
+            if quota_hits:
+                entry["error"] = quota_codes[quota_hits[0]]
+                entry["listed"] = False
+                error_count += 1
+                results.append(entry)
+                continue
 
             listing_types = []
             is_positive_only = True

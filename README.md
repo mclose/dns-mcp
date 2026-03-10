@@ -142,8 +142,13 @@ everywhere — only the config file location and prompt invocation differ.
 
 ### Optional: Spamhaus DQS key
 
-`check_rbl` queries `zen.spamhaus.org` by default, which works for low-volume
-analyst use. For higher-volume or production use, set your
+`check_rbl` queries `zen.spamhaus.org` by default. This works for occasional
+analyst use, but Spamhaus rate-limits or blocks queries from resolvers without
+a service agreement. When this happens, Spamhaus returns administrative codes
+(`127.255.255.252–255`) that the tool detects and surfaces as an error on that
+RBL entry — not a false listing — with a message explaining the cause.
+
+For reliable, unrestricted access, set your free
 [Spamhaus Data Query Service](https://www.spamhaus.com/free-trial/sign-up-for-a-free-data-query-service-account/)
 key via the `SPAMHAUS_DQS_KEY` environment variable — the tool will
 automatically switch to the DQS zone:

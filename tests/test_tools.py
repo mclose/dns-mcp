@@ -1783,3 +1783,12 @@ class TestCheckRbl:
         """spamhaus_dqs reflects whether a DQS key is configured"""
         result = check_rbl(ip_address="8.8.8.8", nameserver="9.9.9.9")
         assert isinstance(result["spamhaus_dqs"], bool)
+
+    def test_spamhaus_quota_code_not_listed(self):
+        """Spamhaus quota/block return codes must not be treated as IP listings"""
+        from server import _RBL_LIST
+
+        zen = next(r for r in _RBL_LIST if r["name"] == "Spamhaus ZEN")
+        assert "quota_codes" in zen
+        for code in ("127.255.255.252", "127.255.255.254", "127.255.255.255"):
+            assert code in zen["quota_codes"], f"Missing quota code: {code}"
