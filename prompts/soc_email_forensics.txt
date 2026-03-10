@@ -129,6 +129,9 @@ throughout the workflow as specified in each step.
   check_dane       Check for DANE TLSA records on a domain's MX hosts; verifies
                    DNSSEC coverage and classifies each host as dane_valid,
                    dane_present_no_dnssec, or no_dane
+  check_rbl        IP reputation check against 8 DNS-based blocklists (Spamhaus ZEN,
+                   SpamCop, UCEProtect L1/L2, Mailspike, PSBL, Barracuda, SORBS);
+                   returns per-RBL listed/clean/error status with decoded reason codes
   rdap_lookup      Domain registration via RDAP (registrar, creation/expiration dates,
                    domain age, registrant org/country)
   nsec_info        Probe DNSSEC denial-of-existence mechanism (NSEC vs NSEC3)
@@ -256,6 +259,35 @@ Workflow (follow in order)
      to an IP using dns_query. If the resolved IP matches the original sending
      IP, FCrDNS passes — this confirms a verified bidirectional relationship
      between the IP and hostname. FCrDNS failure is a moderate negative signal.
+
+     check_rbl on the originating sending IP. Report each RBL result
+     (listed/clean/error) with the decoded reason code for any listings.
+     Common listings and their significance:
+       Spamhaus SBL — confirmed spam source; strong negative signal.
+       Spamhaus CSS — snowshoe spam; strong negative signal.
+       Spamhaus PBL — end-user/dynamic IP range, not expected to send email
+         directly to MX servers. Legitimate cloud/ESP IPs are typically
+         delisted. A PBL listing for a transactional email sender is suspicious.
+       SpamCop — active spam complaints; moderate negative signal.
+       UCEProtect L1 — individual IP; moderate negative signal.
+       UCEProtect L2 — IP's /24 subnet; lower confidence, may be collateral.
+       Barracuda / Mailspike / SORBS / PSBL — vary by RBL; report and note
+         the specific reason code returned.
+
+     IMPORTANT — RBL temporal caveat: RBL status reflects the IP's reputation
+     at the time of this analysis, NOT at the time the email was delivered.
+     IPs can be listed and delisted within hours. Always compare the email's
+     delivery date (from step 1) against today's analysis date. If more than
+     7 days have elapsed, include this note in the routing section:
+
+       "RBL status is current as of [analysis date]. The email was delivered
+       on [delivery date] — [N] days ago. RBL listings in effect at delivery
+       time may have differed. A current listing supports suspicion but is
+       not conclusive evidence of malicious activity at delivery time. A
+       current clean result does not clear the IP retroactively."
+
+     If 7 days or fewer have elapsed, the RBL status is sufficiently
+     contemporaneous — note the analysis date but no special caveat is needed.
 
 5) Attachment analysis (metadata only)
    - List all MIME parts: Content-Type, Content-Disposition, filename, and
@@ -445,6 +477,8 @@ Routing / IP analysis
 - Sending IP/host: ...
 - Reverse DNS (PTR): ... [reverse_dns result]
 - FCrDNS: ... [forward-confirmed reverse DNS: match/mismatch]
+- RBL reputation: ... [check_rbl result: per-RBL listed/clean/error with reason codes]
+- RBL temporal note: ... [if delivery was >7 days ago, include the RBL caveat; otherwise state analysis date]
 - WHOIS/ASN: ...
 - Timestamp analysis: ...
 - Notes: ...
