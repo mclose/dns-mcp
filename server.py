@@ -3036,7 +3036,7 @@ def _print_startup_banner(transport: str):
             line("   🔍  d n s - m c p", 1),
             empty,
             line("   DNS & Domain Security Analysis Server"),
-            line(f"   23 tools · DNSSEC · MCP · {transport}"),
+            line(f"   23 tools · 3 resources · DNSSEC · MCP · {transport}"),
             empty,
             line(f"   ✨ Spotlight: {tool}", 1),
             line(f"      {desc}"),
@@ -3234,6 +3234,232 @@ def dnssec_chain_audit() -> str:
 def soc_email_forensics() -> str:
     """Forensic phishing analysis of a raw email (.eml or pasted headers). Returns TRUSTABLE / SUSPICIOUS / PHISHING / FURTHER ANALYSIS REQUIRED."""
     return (_PROMPT_DIR / "soc_email_forensics.txt").read_text()
+
+
+# ---------------------------------------------------------------------------
+# Resources — reference data for interpreting tool outputs
+# ---------------------------------------------------------------------------
+
+
+@mcp.resource(
+    "dns-mcp://output-guide",
+    name="output-guide",
+    description="Field-by-field reference for interpreting dns-mcp tool outputs",
+    mime_type="text/markdown",
+)
+def output_guide() -> str:
+    """Reference guide for interpreting dns-mcp tool output fields and status values."""
+    return """\
+# dns-mcp Output Interpretation Guide
+
+## DNSSEC — ds_dnssec_validate
+
+### DS vs DNSKEY: the parent/child relationship
+- **DS** (Delegation Signer) lives in the **parent zone** — one level up in
+  the DNS hierarchy. For a TLD-registered domain (example.com) this means
+  your registrar submits it to the TLD. For a delegated subdomain you control
+  (sub.example.com), you manage it yourself in the parent zone (example.com).
+  Either way: DS always lives in the parent, not your zone.
+- **DNSKEY** lives in **your own zone**. Two key types:
+  - KSK (Key Signing Key, flags=257) — signs the DNSKEY RRset; its hash is
+    what the parent DS must match.
+  - ZSK (Zone Signing Key, flags=256) — signs your A, MX, TXT records etc.
+- **Chain of trust:** resolver fetches DS from parent → computes hash of
+  child KSK → must match → then trusts child DNSKEY set → validates records.
+  A mismatch anywhere = bogus.
+
+### overall_status values
+- `fully validated` — chain walked cleanly AND resolver AD flag confirmed it.
+- `bogus` — chain walk found a break (wrong key, expired RRSIG, hash mismatch).
+  Always cross-check with `resolver_ad_flag` before acting — see discrepancy.
+- `insecure` — no DNSSEC on this zone (no DS in parent); not an error.
+
+### resolver_ad_flag
+The AD (Authenticated Data) flag in the DNS response header. Set by a
+validating resolver (e.g. Quad9) when it has independently verified the chain.
+`true` = resolver accepts the chain as secure.
+
+### discrepancy field
+Present only when `overall_status` and `resolver_ad_flag` disagree.
+- Tool says bogus, AD=true → likely a tool limitation; resolver wins.
+  Run `dig +dnssec A <domain> @9.9.9.9` and look for `ad` in the flags line.
+- Tool says validated, AD=false → resolver does not confirm; treat as unvalidated.
+
+### chain_of_trust steps
+Each step has a `status`: `secure`, `bogus`, `insecure`, `no_dnskey`,
+`indeterminate`, or `error`. The first non-secure step is where the break is.
+
+---
+
+## reverse_dns
+
+### fcrDNS (Forward-Confirmed Reverse DNS)
+- `fcrDNS.pass: true` — PTR resolves to a hostname, and that hostname resolves
+  back to the original IP. This is the gold standard for mail server identity.
+- `fcrDNS.pass: false` — PTR exists but the forward lookup doesn't confirm the
+  IP, or no PTR exists at all. Many spam filters reject mail from such hosts.
+- `fcrDNS.forward_match: false` — hostname resolved, but IPs returned did not
+  include the original IP (misconfigured forward DNS).
+- `fcrDNS.hostname: null` — no PTR record exists (NXDOMAIN on reverse lookup).
+
+---
+
+## check_dane
+
+- `dane_valid` — TLSA records found AND DNSSEC-validated by the resolver.
+- `dane_present_no_dnssec` — TLSA records found but the resolver did not set
+  AD=true. DANE without DNSSEC is untrustworthy (records can be spoofed).
+- `dane_missing` — no TLSA records found for the MX host(s).
+
+---
+
+## check_rbl
+
+Each RBL entry has three possible states:
+- `listed: true` — IP matched a listing; `listing_types` describes the reason.
+- `listed: false, error: null` — IP is clean (NXDOMAIN response = not listed).
+- `listed: false, error: "<message>"` — query errored or hit a quota/block code.
+  For Spamhaus this means the query limit was exceeded or the resolver is not
+  allowlisted — set `SPAMHAUS_DQS_KEY` env var. This is NOT a listing.
+
+`listed_count + clean_count + error_count` always equals 8 (one per RBL).
+
+---
+
+## detect_hijacking
+
+### passed field semantics
+`passed: true` = the check found **no hijacking** on that probe.
+`passed: false` = the check found evidence of tampering (or could not complete).
+
+### transparent_proxy check
+`passed: false` here means a transparent DNS proxy intercepting port 53 was
+**detected** — not that the check failed to run. The `note` field explains.
+This is the strongest hijack signal: direct query to a root server returned
+RA=1 (Recursion Available), which root servers never set legitimately.
+
+### DNSSEC AD flag (check 3)
+Informational only — does not contribute to the `hijacked` verdict. A resolver
+that does not set AD is not hijacked, just not validating DNSSEC.
+
+---
+
+## dns_dig_style / dns_query_dot
+
+### AD flag (header.dnssec.ad)
+`true` means the queried resolver validated the DNSSEC chain for this response.
+Absent or `false` means the resolver either doesn't validate DNSSEC or the
+chain is broken. Use `dns_dnssec_validate` to investigate further.
+"""
+
+
+@mcp.resource(
+    "dns-mcp://rbl-reference",
+    name="rbl-reference",
+    description="Return code reference for all 8 RBLs queried by check_rbl",
+    mime_type="text/markdown",
+)
+def rbl_reference() -> str:
+    """Return code meanings for all RBLs queried by check_rbl."""
+    return """\
+# RBL Return Code Reference
+
+All RBLs use the pattern: `{reversed-ip}.{rbl-zone}` A query.
+NXDOMAIN = not listed. Any A record = listed (see codes below).
+
+## Spamhaus ZEN (zen.spamhaus.org / DQS)
+Composite zone covering SBL, XBL, and PBL.
+
+| Return code | Meaning |
+|-------------|---------|
+| 127.0.0.2 | SBL — direct spam source |
+| 127.0.0.3 | SBL CSS — spam support services (hosting, bulletproof) |
+| 127.0.0.4–7 | XBL — exploited/compromised host (CBL data) |
+| 127.0.0.9 | DROP — do not route or peer (hijacked netblock) |
+| 127.0.0.10 | PBL — ISP policy block (dynamic/end-user IP range) |
+| 127.0.0.11 | PBL — Spamhaus maintained policy block |
+
+**Quota/administrative codes (NOT listings — treated as errors):**
+
+| Return code | Meaning |
+|-------------|---------|
+| 127.255.255.252 | Resolver not allowlisted by Spamhaus — use SPAMHAUS_DQS_KEY |
+| 127.255.255.254 | Query limit exceeded — use SPAMHAUS_DQS_KEY for unrestricted access |
+| 127.255.255.255 | Source IP blocked — use SPAMHAUS_DQS_KEY |
+
+## SpamCop (bl.spamcop.net)
+| 127.0.0.2 | Listed — reported spam source |
+
+## UCEProtect L1 (dnsbl-1.uceprotect.net)
+| 127.0.0.2 | Listed — direct spam source (single IP) |
+
+## UCEProtect L2 (dnsbl-2.uceprotect.net)
+| 127.0.0.2 | Listed — netblock contains spam sources (wider net than L1) |
+
+## Mailspike (bl.mailspike.net)
+Unique: also returns **positive reputation** codes for known-good senders.
+
+| Return code | Meaning | listed |
+|-------------|---------|--------|
+| 127.0.0.2 | Spam source | true |
+| 127.0.0.3 | Poor reputation | true |
+| 127.0.0.4 | Very poor reputation | true |
+| 127.0.0.5 | Worst reputation | true |
+| 127.0.0.10 | Excellent sender reputation | false (positive) |
+| 127.0.0.11–14 | Good/neutral sender reputation | false (positive) |
+
+## PSBL (psbl.surriel.com)
+| 127.0.0.2 | Listed — passive spam source |
+
+## Barracuda (b.barracudacentral.org)
+| 127.0.0.2 | Listed — spam source |
+
+## SORBS (dnsbl.sorbs.net)
+| Return code | Meaning |
+|-------------|---------|
+| 127.0.0.2 | HTTP proxy |
+| 127.0.0.3 | SOCKS proxy |
+| 127.0.0.4 | Misc open proxy |
+| 127.0.0.5 | SMTP open relay |
+| 127.0.0.6 | Spam source (direct) |
+| 127.0.0.7 | Web form abuse |
+| 127.0.0.8 | DUL — dynamic/end-user IP |
+| 127.0.0.10 | Escalated — listed in multiple SORBS zones |
+
+---
+SORBS may timeout occasionally — handled gracefully; counted as error_count.
+"""
+
+
+@mcp.resource(
+    "dns-mcp://test-zones",
+    name="test-zones",
+    description="Live DNSSEC/NSEC test zones maintained on deflationhollow.net",
+    mime_type="text/markdown",
+)
+def test_zones() -> str:
+    """Reference for the live NSEC/NSEC3 test zones used with nsec_info."""
+    return """\
+# dns-mcp Live Test Zones (deflationhollow.net)
+
+These zones exist specifically for testing DNSSEC denial-of-existence tooling.
+All are DNSSEC-signed with DS records in the parent zone.
+
+| Zone | NSEC type | Parameters | Risk level |
+|------|-----------|------------|------------|
+| nsec-test.deflationhollow.net | NSEC | — | High — zone is walkable (all names enumerable) |
+| nsec3-weak.deflationhollow.net | NSEC3 | iter=0, no salt | Moderate — RFC 9276 default, offline hash attack feasible |
+| nsec3-salted.deflationhollow.net | NSEC3 | iter=0, 8-byte salt | Moderate — salt raises offline attack cost |
+| nsec3-optout.deflationhollow.net | NSEC3 | opt-out flag set | Low — opt-out means unsigned delegations may not appear |
+
+## Notes
+- All four zones are on ns1/ns2/ns3.deflationhollow.net
+- Use these as `nsec_info` targets when you need known-good assertions
+- Avoid Cloudflare zones for NSEC testing — wildcard responses return NOERROR
+  instead of NXDOMAIN, breaking denial-of-existence probes
+- Modern BIND (9.18+) enforces iterations=0 — high-iteration zones are not
+  creatable but still exist in the wild (~88% of NSEC3 zones per research)
+"""
 
 
 if __name__ == "__main__":

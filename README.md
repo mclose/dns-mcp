@@ -46,6 +46,21 @@ through any MCP-compatible assistant in real time.
 | `session_stats` | Per-tool call counts, error rates, and latency for this container session |
 | `reset_stats` | Reset session stats and clock without restarting the container |
 
+## Resources
+
+Three reference resources are available to MCP clients that support resource
+reading. They cover tool-specific output vocabulary that a client AI cannot
+infer from tool schemas alone — field meanings, status codes, and RBL return
+codes specific to this server's output format.
+
+| Resource URI | Contents |
+|-------------|----------|
+| `dns-mcp://output-guide` | Field-by-field reference: DNSSEC chain status values, DS vs DNSKEY parent/child relationship, FCrDNS fields, DANE status, RBL listed/clean/error semantics, detect_hijacking `passed` convention |
+| `dns-mcp://rbl-reference` | Return code tables for all 8 RBLs including Spamhaus quota codes |
+| `dns-mcp://test-zones` | Live NSEC/NSEC3 test zones on deflationhollow.net with parameters and risk levels |
+
+Resources are pull-based — clients load them on demand, not on every message.
+
 ## Analyst Prompts
 
 The server ships with three analyst prompt templates. Any MCP-compatible client

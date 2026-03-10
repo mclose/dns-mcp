@@ -291,6 +291,47 @@ else
 fi
 echo ""
 
+echo -e "${YELLOW}[30] List Resources (expect 3)${NC}"
+RESOURCES_LIST_BODY='{"jsonrpc":"2.0","id":30,"method":"resources/list"}'
+echo "$RESOURCES_LIST_BODY" | jq .
+echo "$RESOURCES_LIST_BODY" >&3
+if read -t 10 -r RESOURCES_LIST_RESPONSE <&4; then
+    RESOURCE_URIS=$(echo "$RESOURCES_LIST_RESPONSE" | jq -r '.result.resources[].uri' 2>/dev/null)
+    RESOURCE_COUNT=$(echo "$RESOURCE_URIS" | grep -c . || true)
+    echo -e "  Resources found: ${RESOURCE_COUNT}"
+    echo "$RESOURCE_URIS" | while read -r uri; do echo "    - $uri"; done
+    if [ "$RESOURCE_COUNT" -ge 3 ]; then
+        PASS=$((PASS + 1))
+    else
+        echo -e "${RED}  EXPECTED 3 resources, got ${RESOURCE_COUNT}${NC}"
+        FAIL=$((FAIL + 1))
+    fi
+else
+    echo -e "${RED}  FAILED - no response (10s timeout)${NC}"
+    FAIL=$((FAIL + 1))
+fi
+echo ""
+
+echo -e "${YELLOW}[31] Read Resource - output-guide${NC}"
+RESOURCE_READ_BODY='{"jsonrpc":"2.0","id":31,"method":"resources/read","params":{"uri":"dns-mcp://output-guide"}}'
+echo "$RESOURCE_READ_BODY" | jq .
+echo "$RESOURCE_READ_BODY" >&3
+if read -t 10 -r RESOURCE_READ_RESPONSE <&4; then
+    RESOURCE_TEXT=$(echo "$RESOURCE_READ_RESPONSE" | jq -r '.result.contents[0].text // empty' 2>/dev/null)
+    if echo "$RESOURCE_TEXT" | grep -q "DS vs DNSKEY"; then
+        echo -e "  Content verified (contains 'DS vs DNSKEY')"
+        PASS=$((PASS + 1))
+    else
+        echo -e "${RED}  FAILED - resource content missing expected text${NC}"
+        echo "$RESOURCE_READ_RESPONSE" | jq .
+        FAIL=$((FAIL + 1))
+    fi
+else
+    echo -e "${RED}  FAILED - no response (10s timeout)${NC}"
+    FAIL=$((FAIL + 1))
+fi
+echo ""
+
 # ── Summary ──────────────────────────────────────────────────
 
 TOTAL=$((PASS + FAIL))
