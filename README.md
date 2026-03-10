@@ -35,7 +35,7 @@ through any MCP-compatible assistant in real time.
 | `check_dane` | DANE TLSA record check with DNSSEC validation for a domain's MX hosts |
 | `check_tlsa` | Standalone TLSA record lookup for any hostname, port, and protocol |
 | `rdap_lookup` | Domain registration data via RDAP (modern WHOIS replacement) |
-| `check_rbl` | IP reputation check against 8 DNS-based RBLs (Spamhaus ZEN, SpamCop, UCEProtect L1/L2, Mailspike, PSBL, Barracuda, SORBS) |
+| `check_rbl` | IP reputation check against 8 DNS-based RBLs (Spamhaus ZEN, SpamCop, UCEProtect L1/L2, Mailspike, PSBL, Barracuda, SORBS); optional Spamhaus DQS key via `SPAMHAUS_DQS_KEY` env var |
 
 ### Utility
 | Tool | Description |
@@ -135,6 +135,26 @@ everywhere — only the config file location and prompt invocation differ.
     "dns-mcp": {
       "command": "docker",
       "args": ["run", "--rm", "-i", "--dns", "9.9.9.9", "dns-mcp", "python", "server.py"]
+    }
+  }
+}
+```
+
+### Optional: Spamhaus DQS key
+
+`check_rbl` queries `zen.spamhaus.org` by default, which works for low-volume
+analyst use. For higher-volume or production use, set your
+[Spamhaus Data Query Service](https://www.spamhaus.com/free-trial/sign-up-for-a-free-data-query-service-account/)
+key via the `SPAMHAUS_DQS_KEY` environment variable — the tool will
+automatically switch to the DQS zone:
+
+```json
+{
+  "mcpServers": {
+    "dns-mcp": {
+      "command": "docker",
+      "args": ["run", "--rm", "-i", "--dns", "9.9.9.9", "-e", "SPAMHAUS_DQS_KEY", "dns-mcp", "python", "server.py"],
+      "env": { "SPAMHAUS_DQS_KEY": "your-key-here" }
     }
   }
 }
