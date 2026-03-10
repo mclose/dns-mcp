@@ -16,8 +16,8 @@ through any MCP-compatible assistant in real time.
 |------|-------------|
 | `dns_query` | Standard DNS lookups (A, AAAA, MX, TXT, NS, SOA, CNAME, PTR, SRV, DNSKEY, DS, TLSA, CAA, SSHFP, RRSIG, CDS, CDNSKEY, HTTPS, SVCB, NAPTR) |
 | `dns_dig_style` | Detailed dig-style output with DNSSEC flags (DO flag set) — same 20 record types |
-| `dns_query_dot` | DNS over TLS (DoT) query — TLS session info, EDNS pseudosection, DNSSEC flags |
-| `dns_dnssec_validate` | Chain-of-trust validation like `delv +vtrace` |
+| `dns_query_dot` | DNS over TLS (DoT) query — TLS session info, EDNS pseudosection, DNSSEC flags — same 20 record types |
+| `dns_dnssec_validate` | Chain-of-trust validation like `delv +vtrace`; cross-checks verdict against resolver AD flag and flags discrepancies |
 | `nsec_info` | NSEC/NSEC3 denial-of-existence analysis and zone walkability assessment |
 | `reverse_dns` | PTR lookup + forward-confirmed rDNS (FCrDNS) verification — essential for mail server identity |
 | `timestamp_converter` | Convert between ISO, epoch, and human-readable timestamps |
@@ -68,19 +68,19 @@ analysis you want and the model will apply the same workflow.
 
 ## Example
 
-Ask your assistant: *"Check the email security posture of deflationhollow.net"*
+Ask your assistant: *"Check the email security posture of example.com"*
 
 The assistant calls `check_spf`, `check_dmarc`, `check_dane`, `check_mta_sts`,
 and `check_bimi` in sequence and returns a complete analysis:
 ```
-✅ SPF: Hard fail (-all), delegated to ForwardEmail, 5 lookups (under RFC limit)
+✅ SPF: Hard fail (-all), 3 lookups (under RFC limit)
 ✅ DMARC: p=reject, pct=100 — full enforcement, aggregate reporting configured
-⚠️  DANE: TLSA records present but unverifiable — DNSSEC not enabled on zone
-⚠️  MTA-STS: Not configured — no TLS enforcement policy published  
+✅ DANE: TLSA records present and DNSSEC-validated
+⚠️  MTA-STS: Not configured — no TLS enforcement policy published
 ⚠️  BIMI: Not configured
 ```
 
-**Overall: B+ — Strong fundamentals, three actionable gaps identified.**
+**Overall: B+ — Strong fundamentals, two actionable gaps identified.**
 
 No copy-pasting dig commands. No tab-switching. One question.
 
