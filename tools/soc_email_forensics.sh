@@ -144,70 +144,70 @@ analyze_email() {
   # is injected here so it reads as "after the above, also do this"
   # rather than competing with the narrative as the primary output.
   local user_msg
-  user_msg=$(cat <<'MSGEOF'
+  # Unquoted heredoc delimiter so $email_content expands.
+  # JSON schema uses placeholder text without $ so no unwanted expansion.
+  user_msg=$(cat <<MSGEOF
 Analyze the following raw email. Apply the full soc_email_forensics workflow.
 Use dns-mcp tools to validate all claims against live DNS.
 
 ---BEGIN EMAIL---
-MSGEOF
-)
-  user_msg="${user_msg}
 ${email_content}
 ---END EMAIL---
 
-After completing the full narrative report above, call session_stats, then
-emit the machine-readable summary between these exact sentinel lines:
+After completing the full narrative report, call session_stats, then emit
+the machine-readable summary between the sentinel lines below. Fill in all
+values from your analysis. No code fence. No backticks. Raw JSON only.
 
 ---BEGIN-FORENSICS-JSON---
 {
-  "verdict": "<TRUSTABLE|SUSPICIOUS|PHISHING|FURTHER ANALYSIS REQUIRED>",
-  "confidence": "<High|Medium|Low>",
-  "confidence_justification": "<one sentence>",
-  "delivery_date": "<YYYYMMDD>",
-  "delivery_date_source": "<topmost Received header|Received header (Nth)|Date header (sender-controlled, lower confidence)>",
-  "analysis_timestamp": "<ISO-8601 UTC>",
-  "header_completeness": "<FULL|PARTIAL|MINIMAL>",
+  "verdict": "TRUSTABLE or SUSPICIOUS or PHISHING or FURTHER ANALYSIS REQUIRED",
+  "confidence": "High or Medium or Low",
+  "confidence_justification": "one sentence",
+  "delivery_date": "YYYYMMDD",
+  "delivery_date_source": "topmost Received header or Received header Nth or Date header sender-controlled lower confidence",
+  "analysis_timestamp": "ISO-8601 UTC",
+  "header_completeness": "FULL or PARTIAL or MINIMAL",
   "identity": {
-    "from_address": "<exact From: address>",
-    "display_name": "<display name or null>",
-    "subject": "<Subject: value>",
-    "return_path": "<Return-Path or null>",
+    "from_address": "exact From address",
+    "display_name": "display name or null",
+    "subject": "Subject value",
+    "return_path": "Return-Path or null",
     "return_path_matches_from": true,
-    "message_id": "<Message-ID or null>"
+    "message_id": "Message-ID or null"
   },
   "authentication": {
-    "spf": { "header_result": "<pass|fail|softfail|neutral|none|missing>", "dns_record_exists": true, "sending_ip_authorized": true, "issues": [] },
-    "dkim": { "header_result": "<pass|fail|perm_fail|tempfail|none|missing>", "selector": "<s= or null>", "signing_domain": "<d= or null>", "key_exists_in_dns": true, "algorithm": "<rsa-sha256|rsa-sha1|ed25519-sha256|null>", "issues": [] },
-    "dmarc": { "header_result": "<pass|fail|missing>", "policy": "<none|quarantine|reject|missing>", "pct": 100, "alignment_spf": "<pass|fail|null>", "alignment_dkim": "<pass|fail|null>", "record_exists": true, "issues": [] },
+    "spf": { "header_result": "pass or fail or softfail or neutral or none or missing", "dns_record_exists": true, "sending_ip_authorized": true, "issues": [] },
+    "dkim": { "header_result": "pass or fail or perm_fail or tempfail or none or missing", "selector": "s= value or null", "signing_domain": "d= value or null", "key_exists_in_dns": true, "algorithm": "rsa-sha256 or rsa-sha1 or ed25519-sha256 or null", "issues": [] },
+    "dmarc": { "header_result": "pass or fail or missing", "policy": "none or quarantine or reject or missing", "pct": 100, "alignment_spf": "pass or fail or null", "alignment_dkim": "pass or fail or null", "record_exists": true, "issues": [] },
     "arc_present": false,
-    "overall_auth_assessment": "<one sentence>"
+    "overall_auth_assessment": "one sentence"
   },
   "infrastructure": {
-    "sending_ip": "<IP or null>",
-    "ptr_hostname": "<PTR or null>",
-    "fcrDNS": "<pass|fail|null>",
-    "ehlo_hostname": "<EHLO or null>",
-    "ip_classification": "<cloud_esp|datacenter|residential|vpn|unknown>",
-    "asn_org": "<org or null>",
+    "sending_ip": "IP or null",
+    "ptr_hostname": "PTR or null",
+    "fcrDNS": "pass or fail or null",
+    "ehlo_hostname": "EHLO value or null",
+    "ip_classification": "cloud_esp or datacenter or residential or vpn or unknown",
+    "asn_org": "org name or null",
     "routing_hops": 1
   },
   "rbl": {
     "checked": true,
     "listed_count": 0,
     "listings": [],
-    "analysis_date": "<YYYY-MM-DD>",
+    "analysis_date": "YYYY-MM-DD",
     "temporal_caveat_applies": false,
     "days_since_delivery": null
   },
   "domain_intel": {
-    "from_domain": "<domain>",
-    "domain_status": "<active|serverHold|clientHold|pendingDelete|null>",
+    "from_domain": "domain",
+    "domain_status": "active or serverHold or clientHold or pendingDelete or null",
     "mx_records_exist": true,
     "spf_record_exists": true,
     "dmarc_record_exists": true,
-    "rdap_creation_date": "<YYYY-MM-DD or null>",
+    "rdap_creation_date": "YYYY-MM-DD or null",
     "domain_age_days_at_delivery": null,
-    "registrar": "<name or null>"
+    "registrar": "name or null"
   },
   "urls": {
     "total_count": 0,
@@ -218,12 +218,12 @@ emit the machine-readable summary between these exact sentinel lines:
     "redirect_chains_present": false
   },
   "red_flags": [],
-  "rationale_summary": "<2-3 sentence plain-English summary>",
+  "rationale_summary": "2-3 sentence plain-English summary",
   "session_stats": { "total_tool_calls": 0, "tool_breakdown": {}, "errors": 0, "uptime_seconds": 0.0 }
 }
 ---END-FORENSICS-JSON---
-
-Fill in all values from your analysis. No code fence around the JSON."
+MSGEOF
+)
 
   claude \
     -p "$user_msg" \
