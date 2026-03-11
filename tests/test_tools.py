@@ -1952,9 +1952,13 @@ class TestCymruAsn:
 
 class TestCheckFastFlux:
     def test_stable_domain_no_flux(self):
-        """A stable domain with consistent IPs should not trigger flux detection"""
+        """A stable domain with consistent IPs should not trigger flux detection.
+        Uses deflationhollow.net: single IP, TTL=300 (not < 300), never rotates."""
         result = check_fast_flux(
-            "google.com", nameserver="9.9.9.9", query_count=3, delay_seconds=0.0
+            "deflationhollow.net",
+            nameserver="9.9.9.9",
+            query_count=3,
+            delay_seconds=0.0,
         )
         assert "error" not in result
         assert result["flux_detected"] is False
