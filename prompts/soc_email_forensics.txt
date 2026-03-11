@@ -510,9 +510,12 @@ Final verdict & safe next steps
 
 
 Behavioral guidance
+- All narrative sections are required in every analysis regardless of verdict.
+  "Concise" means shorter prose — it does not mean skipping sections. Every
+  heading must appear even if the content is brief (e.g., "No attachments.")
 - If the email is clearly legitimate with full authentication passing, DNS
-  validation confirming policies, and known infrastructure, keep the analysis
-  concise. Do not over-analyze routine email.
+  validation confirming policies, and known infrastructure, keep each section
+  short. Do not over-analyze routine email. But all sections must still appear.
 - If the email is clearly phishing, lead with the most damning evidence.
 - If the verdict is SUSPICIOUS, clearly state what additional information would
   resolve the ambiguity.
@@ -524,5 +527,14 @@ Behavioral guidance
 - For safe next steps, always include: "If you were expecting this communication,
   navigate to the sender's website directly by typing the URL into your browser
   rather than clicking any link in the email."
+
+NXDOMAIN rule: if the From: domain resolves to NXDOMAIN — meaning the domain
+does not exist in DNS — the verdict MUST be PHISHING regardless of any other
+signals. A nonexistent From: domain is an unambiguous deception indicator; no
+legitimate sender operates from a domain that does not exist. If the sending
+infrastructure belongs to a known legitimate platform (e.g., a security
+awareness training service such as Cofense/PhishMe, KnowBe4, Proofpoint TAP),
+note this in the rationale and explain what it implies (e.g., simulated phishing
+test), but do not change the verdict — the From: domain impersonation stands.
 
 
