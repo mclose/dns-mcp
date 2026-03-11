@@ -132,6 +132,12 @@ throughout the workflow as specified in each step.
   check_rbl        IP reputation check against 8 DNS-based blocklists (Spamhaus ZEN,
                    SpamCop, UCEProtect L1/L2, Mailspike, PSBL, Barracuda, SORBS);
                    returns per-RBL listed/clean/error status with decoded reason codes
+  check_dbl        Domain reputation via DNS-based Domain Block Lists (Spamhaus DBL,
+                   URIBL, SURBL); classifies as spam/phishing/malware/botnet C2/
+                   abused-legit; uses registered org domain automatically
+  cymru_asn        Authoritative BGP ASN lookup via Team Cymru DNS; returns ASN,
+                   prefix, country, registry, org name; flags known bulletproof/
+                   high-abuse ASNs automatically
   rdap_lookup      Domain registration via RDAP (registrar, creation/expiration dates,
                    domain age, registrant org/country)
   nsec_info        Probe DNSSEC denial-of-existence mechanism (NSEC vs NSEC3)
@@ -223,6 +229,14 @@ Workflow (follow in order)
      records (or MX pointing to unexpected hosts) that is sending email is
      suspicious.
 
+     check_dbl on the From: domain. This queries DNS-based Domain Block Lists
+     (Spamhaus DBL, URIBL, SURBL) and classifies the domain as spam / phishing /
+     malware / botnet C2 / abused-legit. A listing in Spamhaus DBL with a
+     specific category (e.g., phishing domain) is a strong verdict-level signal.
+     URIBL/SURBL listings are corroborating signals. Clean results are mildly
+     reassuring but not conclusive — newly registered phishing domains may not
+     yet be listed.
+
 3) ARC (Authenticated Received Chain) analysis
    - ARC is uncommon. Always explain what it is and why it matters when it
      appears in a report — assume the user has not seen it before.
@@ -289,6 +303,17 @@ Workflow (follow in order)
      If 7 days or fewer have elapsed, the RBL status is sufficiently
      contemporaneous — note the analysis date but no special caveat is needed.
 
+     cymru_asn on the originating sending IP. This provides authoritative BGP
+     routing data: ASN number, IP prefix, country, registry, and org name via
+     Team Cymru's DNS service. Use this instead of relying on PTR hostname
+     guesses for ASN identification. Key signals:
+       High-risk ASN flag — certain ASNs are known for bulletproof hosting or
+         high abuse volume (M247/AS9009, Frantech/AS53667, ColoCrossing/AS36352,
+         etc.); the tool flags these automatically.
+       Org name mismatch — if the PTR hostname claims one provider but the ASN
+         org is a different company, flag the inconsistency.
+       Country/registry — unexpected country of origin for the claimed sender.
+
 5) Attachment analysis (metadata only)
    - List all MIME parts: Content-Type, Content-Disposition, filename, and
      size if available.
@@ -306,6 +331,10 @@ Workflow (follow in order)
    - If no attachments: "No attachments found."
 
 6) URL and redirect analysis
+   - Skip decorative image srcs, known social media profile domains
+     (facebook.com, twitter.com, x.com, linkedin.com, instagram.com, youtube.com),
+     and any domain already analyzed earlier in this report. For duplicate domains,
+     note the count of occurrences but do not re-run DNS tools.
    - Extract every URL from the body: HTML href attributes, plaintext URLs,
      and URLs in HTML comments or data attributes.
    - Check for obfuscation techniques:
