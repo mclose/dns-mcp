@@ -7,6 +7,7 @@ set -euo pipefail
 
 # ── Parse flags ───────────────────────────────────────────────────────────────
 AUTO_APPROVE=false
+MODEL=claude-sonnet-4-6
 DKIM_SELECTORS=()
 POSITIONAL=()
 SKIP_NEXT=false
@@ -18,6 +19,16 @@ for i in $(seq 1 $#); do
   arg="${!i}"
   case "$arg" in
     -y|--yes) AUTO_APPROVE=true ;;
+    -m|--model)
+      next_i=$((i + 1))
+      next_val="${!next_i:-}"
+      if [ -z "$next_val" ]; then
+        echo "ERROR: --model requires a value" >&2
+        exit 1
+      fi
+      MODEL="$next_val"
+      SKIP_NEXT=true
+      ;;
     -k|--dkim-selector)
       next_i=$((i + 1))
       next_val="${!next_i:-}"
@@ -39,6 +50,7 @@ for i in $(seq 1 $#); do
       echo ""
       echo "Options:"
       echo "  -y, --yes                  Auto-approve dns-mcp tool permissions (skip prompt)"
+      echo "  -m, --model MODEL          Claude model to use (default: claude-sonnet-4-6)"
       echo "  -k, --dkim-selector SEL    Add a known DKIM selector from your provider's"
       echo "                             dashboard. Use multiple times or comma-separate."
       echo "  -h, --help                 Show this help"
@@ -46,6 +58,7 @@ for i in $(seq 1 $#); do
       echo "Examples:"
       echo "  $(basename "$0") example.com"
       echo "  $(basename "$0") -y example.com"
+      echo "  $(basename "$0") -m claude-haiku-4-5-20251001 -y example.com"
       echo "  $(basename "$0") -k fe-abc123 -k fe-def456 example.com"
       echo "  $(basename "$0") -k fe-abc123,fe-def456 example.com"
       exit 0
@@ -267,24 +280,38 @@ echo ""
 
 claude \
   -p "Check the email security posture of ${DOMAIN}" \
-  --model claude-sonnet-4-6 \
+  --model "$MODEL" \
   --mcp-config "$WORK_DIR/mcp.json" \
   --system-prompt-file "$WORK_DIR/system-prompt.txt" \
-  --output-format text \
+  --output-format json \
   --max-turns 15 \
   "${ALLOWED_TOOLS_FLAG[@]}" \
-  > "$WORK_DIR/raw-output.txt"
+  > "$WORK_DIR/raw-output.json"
 
-# Extract the JSON object — Claude sometimes emits prose before/after it
+# Extract posture JSON + cost metadata from claude wrapper
 python3 -c "
 import sys, json
-text = open(sys.argv[1]).read()
+
+wrapper = json.loads(open(sys.argv[1]).read())
+text     = wrapper.get('result', '')
+cost_usd = wrapper.get('total_cost_usd')
+dur_s    = wrapper.get('duration_ms', 0) / 1000
+usage    = wrapper.get('usage', {})
+in_tok   = usage.get('input_tokens', 0) + usage.get('cache_read_input_tokens', 0)
+out_tok  = usage.get('output_tokens', 0)
+
 start = text.index('{')
-end = text.rindex('}') + 1
-obj = json.loads(text[start:end])
+end   = text.rindex('}') + 1
+obj   = json.loads(text[start:end])
 json.dump(obj, open(sys.argv[2], 'w'))
 json.dump(obj, sys.stdout, indent=2)
-" "$WORK_DIR/raw-output.txt" "$OUTPUT_FILE"
+
+print('', file=sys.stderr)
+print(f'  Grade:    {(obj.get(\"summary\") or {}).get(\"overall_grade\", \"?\")}', file=sys.stderr)
+print(f'  Cost:     \${cost_usd:.4f}' if cost_usd is not None else '  Cost:     unknown', file=sys.stderr)
+print(f'  Tokens:   {in_tok:,} in / {out_tok:,} out', file=sys.stderr)
+print(f'  Duration: {dur_s:.1f}s', file=sys.stderr)
+" "$WORK_DIR/raw-output.json" "$OUTPUT_FILE"
 
 echo ""
 echo "── Done: $OUTPUT_FILE"

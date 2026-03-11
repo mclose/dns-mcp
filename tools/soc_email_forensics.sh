@@ -3,9 +3,10 @@
 # Forensic phishing analysis of a raw email (.eml / .txt) via the
 # soc_email_forensics MCP prompt. Spins up a fresh dns-mcp container per run.
 #
-# Output (written to the directory you called this script from):
-#   forensics-<timestamp>.txt  — full narrative analysis
-#   forensics-<timestamp>.json — structured summary (verdict, from, dates, confidence)
+# Modes (mutually exclusive flags; default is --json):
+#   --json          One run → writes forensics-<ts>.json only
+#   --text          One run → writes forensics-<ts>.txt only
+#   --json --text   Two runs → writes both files (same timestamp); warns about cost
 #
 # Usage:
 #   ./tools/soc_email_forensics.sh [options] email.txt
@@ -17,26 +18,50 @@ PROMPT_FILE="$SCRIPT_DIR/../prompts/soc_email_forensics.txt"
 
 # ── Parse flags ───────────────────────────────────────────────────────────────
 AUTO_APPROVE=false
+JSON_MODE=false
+TEXT_MODE=false
+MODEL=claude-sonnet-4-6
 POSITIONAL=()
+SKIP_NEXT=false
+PREV_ARG=""
 for arg in "$@"; do
+  if [ "$SKIP_NEXT" = true ]; then
+    SKIP_NEXT=false
+    case "$PREV_ARG" in
+      -m|--model) MODEL="$arg" ;;
+    esac
+    continue
+  fi
   case "$arg" in
-    -y|--yes) AUTO_APPROVE=true ;;
+    -y|--yes)   AUTO_APPROVE=true ;;
+    --json)     JSON_MODE=true ;;
+    --text)     TEXT_MODE=true ;;
+    -m|--model) PREV_ARG="$arg"; SKIP_NEXT=true ;;
     -h|--help)
       echo "Usage: $(basename "$0") [options] <email.txt|->"
       echo ""
       echo "Forensic phishing analysis of a raw email with full headers."
-      echo "Writes a narrative .txt report and a structured .json summary."
+      echo ""
+      echo "Modes (default: --json):"
+      echo "  --json          One run  → structured JSON only  (forensics-<ts>.json)"
+      echo "  --text          One run  → narrative report only (forensics-<ts>.txt)"
+      echo "  --json --text   Two runs → both files, same timestamp (costs 2x — will ask)"
       echo ""
       echo "Options:"
-      echo "  -y, --yes    Auto-approve dns-mcp tool permissions (skip prompt)"
-      echo "  -h, --help   Show this help"
+      echo "  -y, --yes          Auto-approve dns-mcp tool permissions (skip prompt)"
+      echo "  -m, --model MODEL  Claude model (default: claude-sonnet-4-6)"
+      echo "  -h, --help         Show this help"
       echo ""
       echo "Input:"
       echo "  email.txt    Raw email file with headers (.eml or .txt)"
       echo "  -            Read from stdin"
       echo ""
       echo "Examples:"
-      echo "  $(basename "$0") -y spam/phishing_email.txt"
+      echo "  $(basename "$0") -y email.txt"
+      echo "  $(basename "$0") --json -y email.txt"
+      echo "  $(basename "$0") --text -y email.txt"
+      echo "  $(basename "$0") --json --text -y email.txt"
+      echo "  $(basename "$0") -m claude-haiku-4-5-20251001 --json -y email.txt"
       echo "  $(basename "$0") spam/email1.txt spam/email2.txt"
       echo "  cat email.eml | $(basename "$0") -"
       exit 0
@@ -44,6 +69,15 @@ for arg in "$@"; do
     *) POSITIONAL+=("$arg") ;;
   esac
 done
+
+# Default mode: --json
+if [ "$JSON_MODE" = false ] && [ "$TEXT_MODE" = false ]; then
+  JSON_MODE=true
+fi
+BOTH_MODE=false
+if [ "$JSON_MODE" = true ] && [ "$TEXT_MODE" = true ]; then
+  BOTH_MODE=true
+fi
 
 if [ ${#POSITIONAL[@]} -eq 0 ]; then
   echo "ERROR: no email file specified. Use -h for help." >&2
@@ -66,6 +100,20 @@ fi
 
 ORIG_DIR="$(pwd)"
 TIMESTAMP=$(date -u +%Y%m%dT%H%M%SZ)
+
+# ── Two-pass cost warning ──────────────────────────────────────────────────────
+if [ "$BOTH_MODE" = true ]; then
+  echo ""
+  echo "WARNING: --json --text runs Claude TWICE per email (2x cost and time)."
+  echo "  Model: $MODEL"
+  echo "  Emails: ${#POSITIONAL[@]}"
+  echo ""
+  read -r -p "Continue with two-pass run? [y/N] " _confirm
+  case "$_confirm" in
+    [yY]|[yY][eE][sS]) ;;
+    *) echo "Aborted."; exit 0 ;;
+  esac
+fi
 
 # ── Temp workspace — cleaned up on exit ───────────────────────────────────────
 WORK_DIR=$(mktemp -d)
@@ -105,60 +153,8 @@ else
   esac
 fi
 
-# ── Process each email file ───────────────────────────────────────────────────
-analyze_email() {
-  local email_input="$1"
-  local label="$2"   # display name (filename or "stdin")
-
-  # Read email content
-  local email_content
-  if [ "$email_input" = "-" ]; then
-    email_content=$(cat)
-  else
-    if [ ! -f "$email_input" ]; then
-      echo "ERROR: file not found: $email_input" >&2
-      return 1
-    fi
-    email_content=$(cat "$email_input")
-  fi
-
-  if [ -z "$email_content" ]; then
-    echo "ERROR: empty input for $label" >&2
-    return 1
-  fi
-
-  local file_ts="${TIMESTAMP}"
-  # If processing multiple files, disambiguate with an index
-  local txt_out="${ORIG_DIR}/forensics-${file_ts}.txt"
-  local json_out="${ORIG_DIR}/forensics-${file_ts}.json"
-  local raw_out="$WORK_DIR/raw-${file_ts}.txt"
-
-  echo ""
-  echo "── Input:  $label"
-  echo "── Report: $txt_out"
-  echo "── JSON:   $json_out"
-  echo ""
-
-  # Build user message: email content + JSON schema appended after.
-  # The system prompt drives the narrative workflow. The JSON block
-  # is injected here so it reads as "after the above, also do this"
-  # rather than competing with the narrative as the primary output.
-  local user_msg
-  # Unquoted heredoc delimiter so $email_content expands.
-  # JSON schema uses placeholder text without $ so no unwanted expansion.
-  user_msg=$(cat <<MSGEOF
-Analyze the following raw email. Apply the full soc_email_forensics workflow.
-Use dns-mcp tools to validate all claims against live DNS.
-
----BEGIN EMAIL---
-${email_content}
----END EMAIL---
-
-After completing the full narrative report, call session_stats, then emit
-the machine-readable summary between the sentinel lines below. Fill in all
-values from your analysis. No code fence. No backticks. Raw JSON only.
-
----BEGIN-FORENSICS-JSON---
+# ── JSON schema block (shared by json mode) ───────────────────────────────────
+JSON_SCHEMA='---BEGIN-FORENSICS-JSON---
 {
   "verdict": "TRUSTABLE or SUSPICIOUS or PHISHING or FURTHER ANALYSIS REQUIRED",
   "confidence": "High or Medium or Low",
@@ -221,90 +217,179 @@ values from your analysis. No code fence. No backticks. Raw JSON only.
   "rationale_summary": "2-3 sentence plain-English summary",
   "session_stats": { "total_tool_calls": 0, "tool_breakdown": {}, "errors": 0, "uptime_seconds": 0.0 }
 }
----END-FORENSICS-JSON---
+---END-FORENSICS-JSON---'
+
+# ── Single analysis run ───────────────────────────────────────────────────────
+# run_analysis <email_input> <label> <mode: json|text> <out_file>
+run_analysis() {
+  local email_input="$1"
+  local label="$2"
+  local mode="$3"      # json | text
+  local out_file="$4"  # .json or .txt destination
+
+  # Read email content
+  local email_content
+  if [ "$email_input" = "-" ]; then
+    email_content=$(cat)
+  else
+    email_content=$(cat "$email_input")
+  fi
+
+  local raw_out="$WORK_DIR/raw-$(basename "$out_file").tmp"
+
+  if [ "$mode" = "json" ]; then
+    echo "── JSON:   $out_file"
+    local user_msg
+    user_msg=$(cat <<MSGEOF
+Analyze the following raw email using the soc_email_forensics workflow.
+Run all DNS tool checks. Call session_stats last. Then emit ONLY the
+machine-readable JSON summary between the sentinel lines below.
+No narrative prose. No code fence. Raw JSON only.
+
+---BEGIN EMAIL---
+${email_content}
+---END EMAIL---
+
+${JSON_SCHEMA}
 MSGEOF
 )
+  else
+    echo "── Report: $out_file"
+    local user_msg
+    user_msg=$(cat <<MSGEOF
+Analyze the following raw email. Apply the full soc_email_forensics workflow.
+Use dns-mcp tools to validate all claims against live DNS.
+Write a complete forensic narrative report per the system prompt.
+
+IMPORTANT: Your very first line of output MUST be the emoji title line exactly
+as specified in the system prompt:
+  🔴 PHISHING – short description (from_domain)
+  🟢 TRUSTABLE – short description (from_domain)
+  🟡 SUSPICIOUS – short description (from_domain)
+  🟠 FURTHER ANALYSIS REQUIRED – short description (from_domain)
+This line is mandatory. Do not skip it or move it.
+
+---BEGIN EMAIL---
+${email_content}
+---END EMAIL---
+MSGEOF
+)
+  fi
 
   claude \
     -p "$user_msg" \
-    --model claude-sonnet-4-6 \
+    --model "$MODEL" \
     --mcp-config "$WORK_DIR/mcp.json" \
     --system-prompt-file "$PROMPT_FILE" \
-    --output-format text \
+    --output-format json \
     --max-turns 30 \
     "${ALLOWED_TOOLS_FLAG[@]}" \
     > "$raw_out"
 
-  # Write full narrative
-  cp "$raw_out" "$txt_out"
-
-  # Extract the JSON block delimited by ---BEGIN-FORENSICS-JSON--- / ---END-FORENSICS-JSON---
-  # Falls back to header-line parsing if the block is absent.
-  python3 - "$raw_out" "$json_out" <<'PYEOF'
+  # Extract text + cost metadata from claude JSON wrapper, write output file
+  python3 - "$raw_out" "$out_file" "$mode" <<'PYEOF'
 import sys, json, re
 
-text = open(sys.argv[1]).read()
-data = None
+raw_path, out_path, mode = sys.argv[1], sys.argv[2], sys.argv[3]
 
-# Primary: sentinel-delimited JSON block
-m = re.search(
-    r'---BEGIN-FORENSICS-JSON---\s*(.*?)\s*---END-FORENSICS-JSON---',
-    text, re.DOTALL
-)
-if m:
-    # Strip markdown code fence if Claude wrapped the block in ```json ... ```
-    block = re.sub(r'^\s*```[a-z]*\s*', '', m.group(1).strip())
-    block = re.sub(r'\s*```\s*$', '', block)
-    try:
-        data = json.loads(block)
-    except json.JSONDecodeError as e:
-        data = {"parse_error": str(e), "raw_block": block[:500]}
+try:
+    wrapper = json.loads(open(raw_path).read())
+except Exception:
+    wrapper = {}
 
-# Fallback: old one-liner {"date":...} line
-if data is None:
-    m2 = re.search(r'\{"date"\s*:.*?\}', text)
-    if m2:
-        try:
-            data = json.loads(m2.group(0))
-        except json.JSONDecodeError:
-            data = {}
+text      = wrapper.get("result", open(raw_path).read())
+cost_usd  = wrapper.get("total_cost_usd")
+dur_s     = wrapper.get("duration_ms", 0) / 1000
+usage     = wrapper.get("usage", {})
+in_tok    = usage.get("input_tokens", 0) + usage.get("cache_read_input_tokens", 0)
+out_tok   = usage.get("output_tokens", 0)
 
-if data is None:
-    data = {}
-
-# Fallback: pull verdict from header line if still missing
-if "verdict" not in data:
-    hdr = re.search(
-        r'^\d{8}\s*[–\-]\s*\S+\s*[–\-]\s*(TRUSTABLE|SUSPICIOUS|PHISHING|FURTHER ANALYSIS REQUIRED)',
-        text, re.MULTILINE
+if mode == "text":
+    with open(out_path, "w") as f:
+        f.write(text)
+    # Echo title line to terminal (first non-empty line)
+    for line in text.splitlines():
+        if line.strip():
+            print(f"  {line.strip()}")
+            break
+else:
+    # Extract forensics JSON from sentinels
+    data = None
+    m = re.search(
+        r'---BEGIN-FORENSICS-JSON---\s*(.*?)\s*---END-FORENSICS-JSON---',
+        text, re.DOTALL
     )
-    if hdr:
-        data["verdict"] = hdr.group(1)
+    if m:
+        block = re.sub(r'^\s*```[a-z]*\s*', '', m.group(1).strip())
+        block = re.sub(r'\s*```\s*$', '', block)
+        try:
+            data = json.loads(block)
+        except json.JSONDecodeError as e:
+            data = {"parse_error": str(e), "raw_block": block[:500]}
+    if data is None:
+        data = {}
+    # Fallbacks
+    if "verdict" not in data:
+        hdr = re.search(
+            r'^\d{8}\s*[–\-]\s*\S+\s*[–\-]\s*(TRUSTABLE|SUSPICIOUS|PHISHING|FURTHER ANALYSIS REQUIRED)',
+            text, re.MULTILINE
+        )
+        if hdr:
+            data["verdict"] = hdr.group(1)
+    if "confidence" not in data:
+        conf = re.search(r'Confidence[:\s]+(High|Medium|Low)', text, re.IGNORECASE)
+        if conf:
+            data["confidence"] = conf.group(1).capitalize()
+    with open(out_path, "w") as f:
+        json.dump(data, f, indent=2)
+    verdict    = data.get("verdict", "UNKNOWN")
+    confidence = data.get("confidence", "")
+    from_addr  = (data.get("identity") or {}).get("from_address") or ""
+    listed     = (data.get("rbl") or {}).get("listed_count")
+    tools      = (data.get("session_stats") or {}).get("total_tool_calls")
+    print(f"  Verdict:    {verdict}" + (f"  ({confidence} confidence)" if confidence else ""))
+    if from_addr:
+        print(f"  From:       {from_addr}")
+    if listed is not None:
+        print(f"  RBL hits:   {listed}")
+    if tools is not None:
+        print(f"  Tool calls: {tools}")
 
-# Fallback: confidence
-if "confidence" not in data:
-    conf = re.search(r'Confidence[:\s]+(High|Medium|Low)', text, re.IGNORECASE)
-    if conf:
-        data["confidence"] = conf.group(1).capitalize()
-
-with open(sys.argv[2], "w") as f:
-    json.dump(data, f, indent=2)
-
-# Print summary to stdout
-verdict = data.get("verdict", "UNKNOWN")
-confidence = data.get("confidence", "")
-from_addr = (data.get("identity") or {}).get("from_address") or data.get("from", "")
-listed = (data.get("rbl") or {}).get("listed_count")
-tools = (data.get("session_stats") or {}).get("total_tool_calls")
-
-print(f"  Verdict:    {verdict}" + (f"  ({confidence} confidence)" if confidence else ""))
-if from_addr:
-    print(f"  From:       {from_addr}")
-if listed is not None:
-    print(f"  RBL hits:   {listed}")
-if tools is not None:
-    print(f"  Tool calls: {tools}")
+print(f"  Cost:       ${cost_usd:.4f}" if cost_usd is not None else "  Cost:       unknown")
+print(f"  Tokens:     {in_tok:,} in / {out_tok:,} out")
+print(f"  Duration:   {dur_s:.1f}s")
 PYEOF
+}
+
+# ── Process one email (one or two passes) ─────────────────────────────────────
+analyze_email() {
+  local email_input="$1"
+  local label="$2"
+
+  if [ "$email_input" != "-" ] && [ ! -f "$email_input" ]; then
+    echo "ERROR: file not found: $email_input" >&2
+    return 1
+  fi
+
+  local file_ts="${TIMESTAMP}"
+  local txt_out="${ORIG_DIR}/forensics-${file_ts}.txt"
+  local json_out="${ORIG_DIR}/forensics-${file_ts}.json"
+
+  echo ""
+  echo "── Input:  $label"
+
+  if [ "$BOTH_MODE" = true ]; then
+    echo ""
+    echo "  [ text pass ]"
+    run_analysis "$email_input" "$label" text "$txt_out"
+    echo ""
+    echo "  [ json pass ]"
+    run_analysis "$email_input" "$label" json "$json_out"
+  elif [ "$JSON_MODE" = true ]; then
+    run_analysis "$email_input" "$label" json "$json_out"
+  else
+    run_analysis "$email_input" "$label" text "$txt_out"
+  fi
 
   echo ""
   echo "── Done"
@@ -317,9 +402,8 @@ else
   idx=0
   for f in "${POSITIONAL[@]}"; do
     if [ $idx -gt 0 ]; then
-      # Disambiguate output filenames for multiple inputs
       TIMESTAMP=$(date -u +%Y%m%dT%H%M%SZ)
-      sleep 1  # ensure unique timestamp
+      sleep 1  # ensure unique timestamp per file
     fi
     analyze_email "$f" "$f"
     idx=$((idx + 1))

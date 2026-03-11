@@ -35,7 +35,18 @@ Working backlog. Items are roughly priority-ordered within each section.
 - [x] `tools/soc_email_forensics.sh` — wraps the `soc_email_forensics` MCP prompt;
   accepts one or more raw `.eml`/`.txt` files (or stdin via `-`); writes a full
   narrative `.txt` report and extracts the structured JSON summary line to `.json`.
-  Supports `-y/--yes` auto-approve and multiple file arguments.
+  Supports `-y/--yes` auto-approve, `--json-only`, `--text`, and multiple file arguments.
+
+- [ ] **`soc_email_forensics.sh` — Ctrl-C / keyboard interrupt not trapping** — SIGINT during
+  a `claude` subprocess invocation does not cleanly abort the script. Likely a claude CLI
+  subprocess signal-handling issue, not a trap bug. Low priority; note for future investigation.
+
+- [ ] **`soc_email_forensics.sh` — narrative skipping (known bug)** — in default mode
+  (narrative + JSON), the model occasionally skips the narrative section and outputs
+  only the JSON block when the email is clean/simple. The `.txt` file then contains
+  only the JSON. Workaround: use `--json-only` when you only need the structured output,
+  or `--text` when you only need the narrative. Proper fix: two-pass approach (separate
+  claude runs for narrative and JSON extraction) — reliable but doubles cost and latency.
 
 ---
 
@@ -87,6 +98,37 @@ Working backlog. Items are roughly priority-ordered within each section.
 ---
 
 ## New tools
+
+### Email / threat intelligence (DNS-native)
+
+- [x] **`check_dbl`** — Domain Block List lookup via DNS. Query `{domain}.dbl.spamhaus.org`,
+  `{domain}.multi.uribl.com`, `{domain}.multi.surbl.org`. Return per-list status with
+  category decoding (Spamhaus DBL: spam domain / phishing domain / malware domain /
+  botnet C2 / abused legit domain). Same pattern as `check_rbl` but domain-based.
+  Accepts a domain; works on From: domain, EHLO hostname, URLs extracted from body.
+  High value for email forensics — direct phishing classification signal.
+
+- [x] **`cymru_asn`** — Team Cymru DNS-based ASN lookup. Reverse the IP octets and query
+  `{reversed}.origin.asn.cymru.com` (TXT) for ASN number + prefix + country + registry.
+  Then query `AS{asn}.asn.cymru.com` (TXT) for org name. 100% DNS, no HTTP. Returns:
+  asn, prefix, country, registry, org_name, allocated date. Flag known bulletproof ASNs
+  (M247/AS9009, Frantech/AS53667, etc.) as high-risk. Replaces PTR-based ASN heuristics
+  in `reverse_dns` and `check_rbl` with authoritative BGP data.
+
+- [ ] **`urlscan_search`** — Passive urlscan.io domain/IP lookup (search only, no submission).
+  HTTP call like `rdap_lookup`. Query the search API for existing scans of a domain or IP.
+  Surface: phishing kit tags, redirect chains, landing page ASN, screenshot hash, scan count,
+  first/last seen. Requires API key (env var `URLSCAN_API_KEY`; unauthenticated quota is very
+  limited). Out of scope: submission/detonation API — tool never submits URLs for scanning.
+
+- [ ] **Fast-flux detection — `check_fast_flux`** — Query a domain's A/AAAA records multiple
+  times (5 queries, short delay) and compare results. Signal: TTL < 300s AND answer set
+  changes between queries = fast-flux. Return: ttl, unique_ips_seen, flux_detected bool.
+  Pure DNS. Useful for identifying botnet/phishing infrastructure serving phishing pages.
+
+---
+
+### Other new tools
 
 - [ ] **`check_sshfp`** — query SSHFP records for a hostname; decode algorithm
   (RSA/DSA/ECDSA/Ed25519) and fingerprint type (SHA-1/SHA-256); flag zones

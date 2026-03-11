@@ -37,6 +37,8 @@ from server import (
     check_dane,
     check_tlsa,
     check_rbl,
+    check_dbl,
+    cymru_asn,
     detect_hijacking,
     session_stats,
     reset_stats,
@@ -1792,3 +1794,151 @@ class TestCheckRbl:
         assert "quota_codes" in zen
         for code in ("127.255.255.252", "127.255.255.254", "127.255.255.255"):
             assert code in zen["quota_codes"], f"Missing quota code: {code}"
+
+
+# ---------------------------------------------------------------------------
+# check_dbl
+# ---------------------------------------------------------------------------
+
+
+class TestCheckDbl:
+    def test_known_clean_domain(self):
+        """google.com should be clean across all DBLs"""
+        result = check_dbl(domain="google.com", nameserver="9.9.9.9")
+        assert "error" not in result
+        assert result["domain"] == "google.com"
+        assert result["org_domain"] == "google.com"
+        assert isinstance(result["listed_count"], int)
+        assert isinstance(result["clean_count"], int)
+        assert isinstance(result["error_count"], int)
+
+    def test_response_structure(self):
+        result = check_dbl(domain="google.com", nameserver="9.9.9.9")
+        for key in (
+            "timestamp",
+            "domain",
+            "org_domain",
+            "spamhaus_dqs",
+            "listed_count",
+            "clean_count",
+            "error_count",
+            "results",
+            "errors",
+        ):
+            assert key in result, f"Missing key: {key}"
+
+    def test_result_entry_structure(self):
+        result = check_dbl(domain="google.com", nameserver="9.9.9.9")
+        assert len(result["results"]) == 3  # Spamhaus DBL, URIBL, SURBL
+        entry = result["results"][0]
+        for key in (
+            "dbl",
+            "zone_queried",
+            "listed",
+            "listing_types",
+            "explanation",
+            "error",
+        ):
+            assert key in entry, f"Missing key in result entry: {key}"
+
+    def test_subdomain_uses_org_domain(self):
+        """Subdomains should be resolved to org domain for lookup"""
+        result = check_dbl(domain="mail.google.com", nameserver="9.9.9.9")
+        assert result["org_domain"] == "google.com"
+
+    def test_invalid_domain(self):
+        result = check_dbl(domain="not_a_domain!", nameserver="9.9.9.9")
+        assert "error" in result
+
+    def test_invalid_nameserver(self):
+        result = check_dbl(domain="google.com", nameserver="not-an-ip")
+        assert "error" in result
+
+    def test_spamhaus_dbl_quota_codes(self):
+        """Spamhaus DBL entry should have quota_codes defined"""
+        from server import _DBL_LIST
+
+        dbl_entry = next(d for d in _DBL_LIST if d["name"] == "Spamhaus DBL")
+        assert "quota_codes" in dbl_entry
+        for code in ("127.255.255.252", "127.255.255.254", "127.255.255.255"):
+            assert code in dbl_entry["quota_codes"], f"Missing quota code: {code}"
+
+    def test_spamhaus_dqs_flag(self):
+        result = check_dbl(domain="google.com", nameserver="9.9.9.9")
+        assert isinstance(result["spamhaus_dqs"], bool)
+
+    def test_uribl_surbl_bitmask_config(self):
+        """URIBL and SURBL entries should have bitmask_labels"""
+        from server import _DBL_LIST
+
+        for name in ("URIBL", "SURBL"):
+            entry = next(d for d in _DBL_LIST if d["name"] == name)
+            assert entry["bitmask"] is True
+            assert isinstance(entry["bitmask_labels"], dict)
+            assert len(entry["bitmask_labels"]) > 0
+
+
+# ---------------------------------------------------------------------------
+# cymru_asn
+# ---------------------------------------------------------------------------
+
+
+class TestCymruAsn:
+    def test_known_ip_google(self):
+        """8.8.8.8 should resolve to AS15169 (Google)"""
+        result = cymru_asn(ip_address="8.8.8.8", nameserver="9.9.9.9")
+        assert "error" not in result
+        assert result["ip_address"] == "8.8.8.8"
+        assert result["ip_version"] == 4
+        assert result["asn"] == 15169
+        assert result["country"] == "US"
+        assert result["org_name"] is not None
+        assert "google" in result["org_name"].lower()
+
+    def test_known_ip_cloudflare(self):
+        """1.1.1.1 should resolve to AS13335 (Cloudflare)"""
+        result = cymru_asn(ip_address="1.1.1.1", nameserver="9.9.9.9")
+        assert result["asn"] == 13335
+        assert result["org_name"] is not None
+        assert "cloudflare" in result["org_name"].lower()
+
+    def test_response_structure(self):
+        result = cymru_asn(ip_address="8.8.8.8", nameserver="9.9.9.9")
+        for key in (
+            "timestamp",
+            "ip_address",
+            "ip_version",
+            "asn",
+            "prefix",
+            "country",
+            "registry",
+            "allocated",
+            "org_name",
+            "high_risk_asn",
+            "high_risk_note",
+            "errors",
+        ):
+            assert key in result, f"Missing key: {key}"
+
+    def test_high_risk_asn_flag(self):
+        """high_risk_asn and high_risk_note reflect _HIGH_RISK_ASNS membership"""
+        from server import _HIGH_RISK_ASNS
+
+        result = cymru_asn(ip_address="8.8.8.8", nameserver="9.9.9.9")
+        # 8.8.8.8 / AS15169 is not in the high-risk list
+        assert result["high_risk_asn"] is (result["asn"] in _HIGH_RISK_ASNS)
+
+    def test_invalid_ip(self):
+        result = cymru_asn(ip_address="not-an-ip", nameserver="9.9.9.9")
+        assert "error" in result
+
+    def test_invalid_nameserver(self):
+        result = cymru_asn(ip_address="8.8.8.8", nameserver="not-an-ip")
+        assert "error" in result
+
+    def test_ipv6(self):
+        """2606:4700:4700::1111 is Cloudflare — should return AS13335"""
+        result = cymru_asn(ip_address="2606:4700:4700::1111", nameserver="9.9.9.9")
+        assert result["ip_version"] == 6
+        # Structure check — live ASN data may vary
+        assert isinstance(result["asn"], (int, type(None)))

@@ -152,10 +152,10 @@ if read -t 10 -r LIST_RESPONSE <&4; then
     echo -e "  Tools found: ${TOOL_COUNT}"
     echo "$TOOL_NAMES" | while read -r name; do echo "    - $name"; done
 
-    if [ "$TOOL_COUNT" -ge 23 ]; then
+    if [ "$TOOL_COUNT" -ge 25 ]; then
         PASS=$((PASS + 1))
     else
-        echo -e "${RED}  EXPECTED 23 tools, got ${TOOL_COUNT}${NC}"
+        echo -e "${RED}  EXPECTED 25 tools, got ${TOOL_COUNT}${NC}"
         FAIL=$((FAIL + 1))
     fi
 else
@@ -247,10 +247,16 @@ call_tool 26 "dns_query_dot - example.com A via DoT (9.9.9.9:853)" \
 call_tool 27 "check_rbl - 8.8.8.8 (Google DNS, expect clean)" \
     '{"jsonrpc":"2.0","id":27,"method":"tools/call","params":{"name":"check_rbl","arguments":{"ip_address":"8.8.8.8","nameserver":"9.9.9.9"}}}'
 
+call_tool 28 "check_dbl - google.com (expect clean)" \
+    '{"jsonrpc":"2.0","id":28,"method":"tools/call","params":{"name":"check_dbl","arguments":{"domain":"google.com","nameserver":"9.9.9.9"}}}'
+
+call_tool 29 "cymru_asn - 8.8.8.8 (expect AS15169 Google)" \
+    '{"jsonrpc":"2.0","id":29,"method":"tools/call","params":{"name":"cymru_asn","arguments":{"ip_address":"8.8.8.8","nameserver":"9.9.9.9"}}}'
+
 # ── Analyst Prompts ───────────────────────────────────────────
 
-echo -e "${YELLOW}[28] List Prompts (expect 3)${NC}"
-PROMPTS_LIST_BODY='{"jsonrpc":"2.0","id":28,"method":"prompts/list"}'
+echo -e "${YELLOW}[30] List Prompts (expect 3)${NC}"
+PROMPTS_LIST_BODY='{"jsonrpc":"2.0","id":30,"method":"prompts/list"}'
 echo "$PROMPTS_LIST_BODY" | jq .
 echo "$PROMPTS_LIST_BODY" >&3
 if read -t 10 -r PROMPTS_LIST_RESPONSE <&4; then
@@ -270,8 +276,8 @@ else
 fi
 echo ""
 
-echo -e "${YELLOW}[29] Get Prompt - email_security_audit${NC}"
-PROMPT_GET_BODY='{"jsonrpc":"2.0","id":29,"method":"prompts/get","params":{"name":"email_security_audit"}}'
+echo -e "${YELLOW}[31] Get Prompt - email_security_audit${NC}"
+PROMPT_GET_BODY='{"jsonrpc":"2.0","id":31,"method":"prompts/get","params":{"name":"email_security_audit"}}'
 echo "$PROMPT_GET_BODY" | jq .
 echo "$PROMPT_GET_BODY" >&3
 if read -t 10 -r PROMPT_GET_RESPONSE <&4; then

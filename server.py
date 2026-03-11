@@ -34,6 +34,8 @@ Tools provided:
   - rdap_lookup: Domain registration data via RDAP (HTTP, not DNS)
   - detect_hijacking: DNS hijacking and tampering detection for a resolver IP
   - check_rbl: IP reputation check against 8 DNS-based RBLs (Spamhaus, SpamCop, SORBS, etc.)
+  - check_dbl: Domain reputation check against DNS-based Domain Block Lists (Spamhaus DBL, URIBL, SURBL)
+  - cymru_asn: ASN lookup via Team Cymru DNS service (BGP prefix, org name, high-risk ASN flag)
 """
 
 from fastmcp import FastMCP
@@ -232,6 +234,78 @@ _RBL_LIST = [
         "positive_codes": set(),
     },
 ]
+
+# DBL zone definitions — queried in order for check_dbl().
+# URIBL and SURBL use bitmask return codes; Spamhaus DBL uses direct code lookup.
+_DBL_LIST = [
+    {
+        "name": "Spamhaus DBL",
+        "zone": (
+            f"{SPAMHAUS_DQS_KEY}.dbl.dq.spamhaus.net"
+            if SPAMHAUS_DQS_KEY
+            else "dbl.spamhaus.org"
+        ),
+        "bitmask": False,
+        "codes": {
+            "127.0.1.2": "Spam domain",
+            "127.0.1.4": "Phishing domain",
+            "127.0.1.5": "Malware domain",
+            "127.0.1.6": "Botnet C2 domain",
+            "127.0.1.102": "Abused legit domain — spam",
+            "127.0.1.103": "Abused legit domain — phishing",
+            "127.0.1.104": "Abused legit domain — malware",
+            "127.0.1.105": "Abused legit domain — botnet C2",
+        },
+        "quota_codes": {
+            "127.255.255.252": (
+                "Resolver not allowlisted by Spamhaus — set SPAMHAUS_DQS_KEY "
+                "or use a resolver with a Spamhaus agreement"
+            ),
+            "127.255.255.254": (
+                "Query limit exceeded on dbl.spamhaus.org — set SPAMHAUS_DQS_KEY "
+                "for unrestricted access via the DQS zone"
+            ),
+            "127.255.255.255": (
+                "Source blocked by Spamhaus — set SPAMHAUS_DQS_KEY "
+                "for unrestricted access via the DQS zone"
+            ),
+        },
+    },
+    {
+        "name": "URIBL",
+        "zone": "multi.uribl.com",
+        "bitmask": True,
+        "bitmask_labels": {
+            0x01: "black — confirmed spam domain",
+            0x02: "grey — greylist (new/unverified)",
+            0x04: "red — aggregate spam domain",
+            0x08: "multi — in multiple URIBL lists",
+        },
+    },
+    {
+        "name": "SURBL",
+        "zone": "multi.surbl.org",
+        "bitmask": True,
+        "bitmask_labels": {
+            0x02: "SC — SpamCop data",
+            0x04: "WS — general spam",
+            0x08: "AB — abuse.ch malware",
+            0x10: "PH — phishing",
+            0x40: "MW — malware",
+            0x80: "CRX — compromised domain",
+        },
+    },
+]
+
+# Known high-risk / bulletproof ASNs flagged by cymru_asn (non-exhaustive).
+_HIGH_RISK_ASNS: dict[int, str] = {
+    9009: "M247 — frequently used by spammers and bulletproof hosting operators",
+    53667: "Frantech/BuyVM — bulletproof hosting provider",
+    36352: "ColoCrossing — frequently abused commodity hosting",
+    20473: "Vultr — commodity cloud, high abuse volume",
+    14061: "DigitalOcean — commodity cloud, notable abuse volume",
+    63949: "Linode/Akamai — commodity cloud, notable abuse volume",
+}
 
 # Hardcoded RDAP fallbacks for common TLDs
 _RDAP_FALLBACKS = {
@@ -3017,6 +3091,8 @@ def _print_startup_banner(transport: str):
         ("dns_dig_style", "Dig-style output with DNSSEC flags + DoE"),
         ("detect_hijacking", "DNS hijacking & tampering detection"),
         ("check_rbl", "IP reputation across 8 DNS-based RBLs"),
+        ("check_dbl", "Domain reputation via Spamhaus DBL, URIBL, SURBL"),
+        ("cymru_asn", "BGP ASN + org lookup via Team Cymru DNS"),
         ("quine", "The server reads its own source code"),
     ]
 
@@ -3036,7 +3112,7 @@ def _print_startup_banner(transport: str):
             line("   🔍  d n s - m c p", 1),
             empty,
             line("   DNS & Domain Security Analysis Server"),
-            line(f"   23 tools · 3 resources · DNSSEC · MCP · {transport}"),
+            line(f"   25 tools · 3 resources · DNSSEC · MCP · {transport}"),
             empty,
             line(f"   ✨ Spotlight: {tool}", 1),
             line(f"      {desc}"),
@@ -3209,6 +3285,282 @@ def check_rbl(
         "clean_count": clean_count,
         "error_count": error_count,
         "results": results,
+        "errors": errors,
+    }
+
+
+# ---------------------------------------------------------------------------
+# check_dbl
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+@track("check_dbl")
+def check_dbl(
+    domain: str = Field(
+        description="Domain to check against DNS-based Domain Block Lists"
+    ),
+    nameserver: str = DEFAULT_RESOLVER,
+) -> dict:
+    """
+    Check a domain against DNS-based Domain Block Lists (DBLs).
+
+    DBLs classify domains rather than IPs. Query pattern: {domain}.{dbl-zone}.
+    The registered (org) domain is used for the lookup, stripping subdomains.
+
+    Lists queried (in order):
+      Spamhaus DBL — classifies: spam / phishing / malware / botnet C2 /
+                     abused-legit variants. Direct return-code lookup.
+      URIBL (multi.uribl.com) — bitmask: black / grey / red / multi.
+      SURBL (multi.surbl.org) — bitmask: SC / WS / AB / PH / MW / CRX.
+
+    Spamhaus DBL uses dbl.spamhaus.org by default (low-volume analyst use).
+    Set SPAMHAUS_DQS_KEY env var to enable production DQS queries.
+    """
+    valid, result = validate_domain(domain)
+    if not valid:
+        return {"error": result, "domain": domain}
+
+    try:
+        ipaddress.ip_address(nameserver)
+    except ValueError:
+        return {"error": "Invalid nameserver IP address", "domain": domain}
+
+    org = _get_org_domain(domain)
+
+    resolver = dns.resolver.Resolver()
+    resolver.nameservers = [nameserver]
+    resolver.lifetime = 5.0
+
+    errors = []
+    results = []
+    listed_count = 0
+    clean_count = 0
+    error_count = 0
+
+    for dbl in _DBL_LIST:
+        fqdn = f"{org}.{dbl['zone']}"
+        entry: dict = {
+            "dbl": dbl["name"],
+            "zone_queried": fqdn,
+            "listed": False,
+            "listing_types": [],
+            "explanation": None,
+            "error": None,
+        }
+
+        try:
+            a_answers = resolver.resolve(fqdn, "A")
+            return_codes = [str(rdata) for rdata in a_answers]
+
+            if dbl["bitmask"]:
+                # Decode bitmask from last octet of each return code
+                listing_types = []
+                listed = False
+                for code in return_codes:
+                    try:
+                        last_octet = int(code.split(".")[-1])
+                        for bit, label in dbl["bitmask_labels"].items():
+                            if last_octet & bit:
+                                listing_types.append(label)
+                                listed = True
+                    except (ValueError, IndexError):
+                        listing_types.append(f"Unknown return code {code}")
+                        listed = True
+                entry["listing_types"] = listing_types
+                entry["listed"] = listed
+            else:
+                # Spamhaus DBL: direct code lookup with quota-code guard
+                quota_codes = dbl.get("quota_codes", {})
+                quota_hits = [c for c in return_codes if c in quota_codes]
+                if quota_hits:
+                    entry["error"] = quota_codes[quota_hits[0]]
+                    error_count += 1
+                    results.append(entry)
+                    continue
+
+                listing_types = [
+                    dbl["codes"].get(code, f"Unknown return code {code}")
+                    for code in return_codes
+                ]
+                entry["listing_types"] = listing_types
+                entry["listed"] = bool(listing_types)
+
+            if entry["listed"]:
+                listed_count += 1
+            else:
+                clean_count += 1
+
+            # TXT is informational — failure is non-fatal
+            try:
+                txt_answers = resolver.resolve(fqdn, "TXT")
+                txts = []
+                for rdata in txt_answers:
+                    txts.append(
+                        " ".join(
+                            s.decode() if isinstance(s, bytes) else s
+                            for s in rdata.strings
+                        )
+                    )
+                entry["explanation"] = "; ".join(txts)
+            except Exception:
+                pass
+
+        except dns.resolver.NXDOMAIN:
+            clean_count += 1
+        except dns.resolver.NoAnswer:
+            clean_count += 1
+        except dns.exception.Timeout:
+            error_count += 1
+            entry["error"] = "timeout"
+            errors.append(f"{dbl['name']}: query timed out")
+        except dns.resolver.NoNameservers:
+            error_count += 1
+            entry["error"] = "no nameservers"
+            errors.append(f"{dbl['name']}: no nameservers available")
+        except Exception as exc:
+            error_count += 1
+            entry["error"] = str(exc)
+            errors.append(f"{dbl['name']}: {exc}")
+
+        results.append(entry)
+
+    return {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "domain": domain,
+        "org_domain": org,
+        "spamhaus_dqs": bool(SPAMHAUS_DQS_KEY),
+        "listed_count": listed_count,
+        "clean_count": clean_count,
+        "error_count": error_count,
+        "results": results,
+        "errors": errors,
+    }
+
+
+# ---------------------------------------------------------------------------
+# cymru_asn
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+@track("cymru_asn")
+def cymru_asn(
+    ip_address: str = Field(description="IPv4 or IPv6 address for ASN lookup"),
+    nameserver: str = DEFAULT_RESOLVER,
+) -> dict:
+    """
+    Look up the Autonomous System Number (ASN) for an IP via Team Cymru's DNS service.
+
+    Step 1 — Origin lookup:
+      IPv4: {reversed_octets}.origin.asn.cymru.com TXT
+      IPv6: {reversed_nibbles}.origin6.asn.cymru.com TXT
+      Response format: "ASN | prefix | CC | registry | allocated"
+
+    Step 2 — Org name lookup:
+      AS{asn}.asn.cymru.com TXT
+      Response format: "ASN | | CC | registry | allocated | org name"
+
+    100% DNS — no HTTP. Authoritative BGP routing data.
+    Flags known bulletproof / high-abuse ASNs from a built-in reference list.
+    """
+    try:
+        ip = ipaddress.ip_address(ip_address)
+    except ValueError:
+        return {"error": "Invalid IP address format", "ip_address": ip_address}
+
+    try:
+        ipaddress.ip_address(nameserver)
+    except ValueError:
+        return {"error": "Invalid nameserver IP address", "ip_address": ip_address}
+
+    resolver = dns.resolver.Resolver()
+    resolver.nameservers = [nameserver]
+    resolver.lifetime = 5.0
+
+    errors = []
+
+    # Build reversed lookup FQDN
+    if ip.version == 4:
+        reversed_ip = ".".join(reversed(str(ip).split(".")))
+        origin_fqdn = f"{reversed_ip}.origin.asn.cymru.com"
+    else:
+        expanded = ip.exploded.replace(":", "")
+        reversed_ip = ".".join(reversed(expanded))
+        origin_fqdn = f"{reversed_ip}.origin6.asn.cymru.com"
+
+    asn: int | None = None
+    prefix: str | None = None
+    country: str | None = None
+    registry: str | None = None
+    allocated: str | None = None
+    org_name: str | None = None
+
+    # Step 1: origin lookup
+    try:
+        txt_answers = resolver.resolve(origin_fqdn, "TXT")
+        for rdata in txt_answers:
+            raw = " ".join(
+                s.decode() if isinstance(s, bytes) else s for s in rdata.strings
+            ).strip()
+            # Format: "ASN | prefix | CC | registry | allocated"
+            # Multihomed IPs may have multiple space-separated ASNs in field 0
+            parts = [p.strip() for p in raw.split("|")]
+            if len(parts) >= 1:
+                asn_str = parts[0].split()[0]  # take first ASN if multihomed
+                try:
+                    asn = int(asn_str)
+                except ValueError:
+                    errors.append(f"Could not parse ASN from: {raw}")
+            if len(parts) >= 2:
+                prefix = parts[1].strip() or None
+            if len(parts) >= 3:
+                country = parts[2].strip() or None
+            if len(parts) >= 4:
+                registry = parts[3].strip() or None
+            if len(parts) >= 5:
+                allocated = parts[4].strip() or None
+            break  # use first TXT record
+    except dns.resolver.NXDOMAIN:
+        errors.append(f"No ASN record found for {ip_address}")
+    except dns.exception.Timeout:
+        errors.append(f"Timeout on origin lookup ({origin_fqdn})")
+    except Exception as exc:
+        errors.append(f"Origin lookup error: {exc}")
+
+    # Step 2: org name lookup
+    if asn is not None:
+        asn_fqdn = f"AS{asn}.asn.cymru.com"
+        try:
+            txt_answers = resolver.resolve(asn_fqdn, "TXT")
+            for rdata in txt_answers:
+                raw = " ".join(
+                    s.decode() if isinstance(s, bytes) else s for s in rdata.strings
+                ).strip()
+                # Format: "ASN | | CC | registry | allocated | org name"
+                parts = [p.strip() for p in raw.split("|")]
+                if len(parts) >= 6:
+                    org_name = parts[5].strip() or None
+                elif len(parts) >= 2:
+                    org_name = parts[-1].strip() or None
+                break
+        except Exception as exc:
+            errors.append(f"ASN org name lookup error: {exc}")
+
+    high_risk_note = _HIGH_RISK_ASNS.get(asn) if asn is not None else None
+
+    return {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "ip_address": ip_address,
+        "ip_version": ip.version,
+        "asn": asn,
+        "prefix": prefix,
+        "country": country,
+        "registry": registry,
+        "allocated": allocated,
+        "org_name": org_name,
+        "high_risk_asn": high_risk_note is not None,
+        "high_risk_note": high_risk_note,
         "errors": errors,
     }
 
