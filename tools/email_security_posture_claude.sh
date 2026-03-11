@@ -152,6 +152,11 @@ object. No prose, no markdown, no code fences. Schema:
   }
 }
 
+DMARC issues guidance:
+  - Missing RUA is an issue (no visibility into delivery failures).
+  - Missing RUF is NOT an issue — RUF is optional per RFC 7489 and many
+    organizations omit it intentionally. Do not flag absent RUF in dmarc.issues.
+
 Grading rubric:
   A  = SPF strict (-all), DMARC reject at 100%, DKIM verified, MTA-STS enforce
   A- = SPF strict (-all), DMARC reject at 100%, DKIM verified, MTA-STS missing
