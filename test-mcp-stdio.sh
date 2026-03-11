@@ -152,10 +152,10 @@ if read -t 10 -r LIST_RESPONSE <&4; then
     echo -e "  Tools found: ${TOOL_COUNT}"
     echo "$TOOL_NAMES" | while read -r name; do echo "    - $name"; done
 
-    if [ "$TOOL_COUNT" -ge 25 ]; then
+    if [ "$TOOL_COUNT" -ge 26 ]; then
         PASS=$((PASS + 1))
     else
-        echo -e "${RED}  EXPECTED 25 tools, got ${TOOL_COUNT}${NC}"
+        echo -e "${RED}  EXPECTED 26 tools, got ${TOOL_COUNT}${NC}"
         FAIL=$((FAIL + 1))
     fi
 else
@@ -253,10 +253,13 @@ call_tool 28 "check_dbl - google.com (expect clean)" \
 call_tool 29 "cymru_asn - 8.8.8.8 (expect AS15169 Google)" \
     '{"jsonrpc":"2.0","id":29,"method":"tools/call","params":{"name":"cymru_asn","arguments":{"ip_address":"8.8.8.8","nameserver":"9.9.9.9"}}}'
 
+call_tool 30 "check_fast_flux - google.com (stable domain, no flux)" \
+    '{"jsonrpc":"2.0","id":30,"method":"tools/call","params":{"name":"check_fast_flux","arguments":{"domain":"google.com","nameserver":"9.9.9.9","query_count":3,"delay_seconds":0.0}}}'
+
 # ── Analyst Prompts ───────────────────────────────────────────
 
-echo -e "${YELLOW}[30] List Prompts (expect 3)${NC}"
-PROMPTS_LIST_BODY='{"jsonrpc":"2.0","id":30,"method":"prompts/list"}'
+echo -e "${YELLOW}[31] List Prompts (expect 3)${NC}"
+PROMPTS_LIST_BODY='{"jsonrpc":"2.0","id":31,"method":"prompts/list"}'
 echo "$PROMPTS_LIST_BODY" | jq .
 echo "$PROMPTS_LIST_BODY" >&3
 if read -t 10 -r PROMPTS_LIST_RESPONSE <&4; then

@@ -36,6 +36,7 @@ Tools provided:
   - check_rbl: IP reputation check against 8 DNS-based RBLs (Spamhaus, SpamCop, SORBS, etc.)
   - check_dbl: Domain reputation check against DNS-based Domain Block Lists (Spamhaus DBL, URIBL, SURBL)
   - cymru_asn: ASN lookup via Team Cymru DNS service (BGP prefix, org name, high-risk ASN flag)
+  - check_fast_flux: Fast-flux detection — repeated A/AAAA queries to detect rotating IPs and short TTLs
 """
 
 from fastmcp import FastMCP
@@ -3112,7 +3113,7 @@ def _print_startup_banner(transport: str):
             line("   🔍  d n s - m c p", 1),
             empty,
             line("   DNS & Domain Security Analysis Server"),
-            line(f"   25 tools · 3 resources · DNSSEC · MCP · {transport}"),
+            line(f"   26 tools · 3 resources · DNSSEC · MCP · {transport}"),
             empty,
             line(f"   ✨ Spotlight: {tool}", 1),
             line(f"      {desc}"),
@@ -3561,6 +3562,133 @@ def cymru_asn(
         "org_name": org_name,
         "high_risk_asn": high_risk_note is not None,
         "high_risk_note": high_risk_note,
+        "errors": errors,
+    }
+
+
+# ---------------------------------------------------------------------------
+# check_fast_flux
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+@track("check_fast_flux")
+def check_fast_flux(
+    domain: str = Field(description="Domain to probe for fast-flux behaviour"),
+    nameserver: str | None = Field(
+        default=None,
+        description=f"Nameserver IP (default: {DEFAULT_RESOLVER})",
+    ),
+    query_count: int = Field(
+        default=5,
+        description="Number of A/AAAA query rounds to send (3–10)",
+    ),
+    delay_seconds: float = Field(
+        default=1.0,
+        description="Delay between query rounds in seconds (0.0–5.0)",
+    ),
+) -> dict:
+    """
+    Detect fast-flux DNS by querying a domain's A/AAAA records multiple times
+    and comparing the returned IP sets between rounds.
+
+    Fast-flux is a technique used by botnets and phishing infrastructure to evade
+    takedowns: the domain's records rotate rapidly through a large pool of
+    compromised hosts, with very short TTLs (often < 60 s).
+
+    Detection heuristic:
+      - Sends query_count rounds of A + AAAA queries with delay_seconds between them.
+      - flux_detected = True  when  min_ttl < 300 s  AND  ip_set_changes > 0
+
+    Returns:
+      - min_ttl: lowest TTL observed across all answers (seconds)
+      - unique_ips_seen: count of distinct IPs seen across all rounds
+      - ip_set_changes: how many times the answer set changed between consecutive rounds
+      - all_ips: sorted list of every distinct IP observed
+      - flux_detected: bool — True when TTL is suspiciously low AND IPs rotated
+      - queries: per-round detail [{index, ips, ttl}]
+    """
+    valid, result = validate_domain(domain)
+    if not valid:
+        return {"error": result, "domain": domain}
+
+    ns = nameserver if nameserver is not None else DEFAULT_RESOLVER
+    try:
+        ipaddress.ip_address(ns)
+    except ValueError:
+        return {"error": "Invalid nameserver IP address", "domain": domain}
+
+    if not (3 <= query_count <= 10):
+        return {"error": "query_count must be between 3 and 10", "domain": domain}
+    if not (0.0 <= delay_seconds <= 5.0):
+        return {"error": "delay_seconds must be between 0.0 and 5.0", "domain": domain}
+
+    resolver = dns.resolver.Resolver()
+    resolver.nameservers = [ns]
+    resolver.lifetime = 5.0
+
+    errors: list[str] = []
+    queries: list[dict] = []
+    all_ips: set[str] = set()
+    min_ttl: int | None = None
+
+    for i in range(query_count):
+        if i > 0 and delay_seconds > 0:
+            time.sleep(delay_seconds)
+
+        ips: list[str] = []
+        round_ttl: int | None = None
+        nxdomain = False
+
+        for rtype in ("A", "AAAA"):
+            try:
+                answers = resolver.resolve(domain, rtype)
+                for rdata in answers:
+                    ips.append(str(rdata))
+                if round_ttl is None or answers.rrset.ttl < round_ttl:
+                    round_ttl = answers.rrset.ttl
+            except dns.resolver.NXDOMAIN:
+                errors.append(f"NXDOMAIN for {domain}")
+                nxdomain = True
+                break
+            except dns.resolver.NoAnswer:
+                pass  # no record of this type — normal
+            except dns.exception.Timeout:
+                errors.append(f"Round {i + 1} timed out")
+            except Exception as exc:
+                errors.append(f"Round {i + 1} error: {exc}")
+
+        queries.append({"index": i + 1, "ips": sorted(ips), "ttl": round_ttl})
+        all_ips.update(ips)
+
+        if round_ttl is not None:
+            if min_ttl is None or round_ttl < min_ttl:
+                min_ttl = round_ttl
+
+        if nxdomain:
+            break
+
+    # Count how many times the IP set changed between consecutive rounds
+    ip_set_changes = sum(
+        1
+        for j in range(1, len(queries))
+        if set(queries[j]["ips"]) != set(queries[j - 1]["ips"])
+    )
+
+    flux_detected = min_ttl is not None and min_ttl < 300 and ip_set_changes > 0
+
+    return {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "domain": domain,
+        "nameserver": ns,
+        "query_count": len(queries),
+        "delay_seconds": delay_seconds,
+        "min_ttl": min_ttl,
+        "unique_ips_seen": len(all_ips),
+        "ip_set_changes": ip_set_changes,
+        "all_ips": sorted(all_ips),
+        "flux_detected": flux_detected,
+        "queries": queries,
         "errors": errors,
     }
 

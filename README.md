@@ -37,6 +37,13 @@ through any MCP-compatible assistant in real time.
 | `rdap_lookup` | Domain registration data via RDAP (modern WHOIS replacement) |
 | `check_rbl` | IP reputation check against 8 DNS-based RBLs (Spamhaus ZEN, SpamCop, UCEProtect L1/L2, Mailspike, PSBL, Barracuda, SORBS); optional Spamhaus DQS key via `SPAMHAUS_DQS_KEY` env var |
 
+### Threat Intelligence
+| Tool | Description |
+|------|-------------|
+| `check_dbl` | Domain reputation check against DNS-based Domain Block Lists (Spamhaus DBL, URIBL, SURBL) |
+| `cymru_asn` | ASN lookup via Team Cymru DNS service — BGP prefix, org name, country, and high-risk ASN flag |
+| `check_fast_flux` | Fast-flux detection — repeated A/AAAA queries to identify rotating IPs and suspiciously short TTLs; signals botnet/phishing infrastructure |
+
 ### Utility
 | Tool | Description |
 |------|-------------|
@@ -266,7 +273,7 @@ docker run --rm -i dns-mcp python server.py
   | stdin/stdout (MCP stdio transport)
   v
 FastMCP server (server.py)
-  |  - All 23 tools
+  |  - All 26 tools
   |  - dnspython for DNS queries
   |  - requests for RDAP only
 ```

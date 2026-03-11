@@ -39,6 +39,7 @@ from server import (
     check_rbl,
     check_dbl,
     cymru_asn,
+    check_fast_flux,
     detect_hijacking,
     session_stats,
     reset_stats,
@@ -1942,3 +1943,93 @@ class TestCymruAsn:
         assert result["ip_version"] == 6
         # Structure check — live ASN data may vary
         assert isinstance(result["asn"], (int, type(None)))
+
+
+# ---------------------------------------------------------------------------
+# check_fast_flux
+# ---------------------------------------------------------------------------
+
+
+class TestCheckFastFlux:
+    def test_stable_domain_no_flux(self):
+        """A stable domain with consistent IPs should not trigger flux detection"""
+        result = check_fast_flux(
+            "google.com", nameserver="9.9.9.9", query_count=3, delay_seconds=0.0
+        )
+        assert "error" not in result
+        assert result["flux_detected"] is False
+
+    def test_response_structure(self):
+        result = check_fast_flux(
+            "google.com", nameserver="9.9.9.9", query_count=3, delay_seconds=0.0
+        )
+        for key in (
+            "timestamp",
+            "domain",
+            "nameserver",
+            "query_count",
+            "delay_seconds",
+            "min_ttl",
+            "unique_ips_seen",
+            "ip_set_changes",
+            "all_ips",
+            "flux_detected",
+            "queries",
+            "errors",
+        ):
+            assert key in result, f"Missing key: {key}"
+
+    def test_queries_list_length(self):
+        result = check_fast_flux(
+            "google.com", nameserver="9.9.9.9", query_count=4, delay_seconds=0.0
+        )
+        assert result["query_count"] == 4
+        assert len(result["queries"]) == 4
+        for q in result["queries"]:
+            assert "index" in q
+            assert "ips" in q
+            assert "ttl" in q
+
+    def test_ips_populated(self):
+        result = check_fast_flux(
+            "google.com", nameserver="9.9.9.9", query_count=3, delay_seconds=0.0
+        )
+        assert result["unique_ips_seen"] >= 0
+        assert isinstance(result["all_ips"], list)
+
+    def test_ip_set_changes_type(self):
+        result = check_fast_flux(
+            "google.com", nameserver="9.9.9.9", query_count=3, delay_seconds=0.0
+        )
+        assert isinstance(result["ip_set_changes"], int)
+        assert result["ip_set_changes"] >= 0
+
+    def test_invalid_domain(self):
+        result = check_fast_flux(
+            "not_a_domain!", nameserver="9.9.9.9", query_count=3, delay_seconds=0.0
+        )
+        assert "error" in result
+
+    def test_invalid_nameserver(self):
+        result = check_fast_flux(
+            "google.com", nameserver="not-an-ip", query_count=3, delay_seconds=0.0
+        )
+        assert "error" in result
+
+    def test_query_count_too_low(self):
+        result = check_fast_flux(
+            "google.com", nameserver="9.9.9.9", query_count=2, delay_seconds=0.0
+        )
+        assert "error" in result
+
+    def test_query_count_too_high(self):
+        result = check_fast_flux(
+            "google.com", nameserver="9.9.9.9", query_count=11, delay_seconds=0.0
+        )
+        assert "error" in result
+
+    def test_delay_too_high(self):
+        result = check_fast_flux(
+            "google.com", nameserver="9.9.9.9", query_count=3, delay_seconds=6.0
+        )
+        assert "error" in result
