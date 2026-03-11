@@ -43,6 +43,9 @@ htmlcov/
 # Tool output artifacts
 tools/posture-*.json
 
+# Test spam emails (local only)
+spam/
+
 # Shared files for Claude (screenshots, etc.)
 share2claude/
 
