@@ -533,3 +533,103 @@ Behavioral guidance
 - For safe next steps, always include: "If you were expecting this communication,
   navigate to the sender's website directly by typing the URL into your browser
   rather than clicking any link in the email."
+
+
+JSON summary block (mandatory — emit after the narrative report)
+
+After completing the full narrative analysis, call session_stats to retrieve
+tool call counts and latency, then emit the following block exactly as shown —
+sentinel lines included. The JSON extractor in the shell wrapper keys on these
+sentinels. Do not omit, reorder, or rename keys. Use null for unavailable data.
+
+---BEGIN-FORENSICS-JSON---
+{
+  "verdict": "TRUSTABLE|SUSPICIOUS|PHISHING|FURTHER ANALYSIS REQUIRED",
+  "confidence": "High|Medium|Low",
+  "confidence_justification": "<one sentence>",
+  "delivery_date": "YYYYMMDD",
+  "delivery_date_source": "topmost Received header|Received header (Nth)|Date header (sender-controlled, lower confidence)",
+  "analysis_timestamp": "<ISO-8601 UTC from session_stats or current time>",
+  "header_completeness": "FULL|PARTIAL|MINIMAL",
+  "identity": {
+    "from_address": "<exact From: address>",
+    "display_name": "<display name or null>",
+    "subject": "<Subject: value>",
+    "return_path": "<Return-Path value or null>",
+    "return_path_matches_from": true|false,
+    "message_id": "<Message-ID or null>"
+  },
+  "authentication": {
+    "spf": {
+      "header_result": "pass|fail|softfail|neutral|none|missing",
+      "dns_record_exists": true|false,
+      "sending_ip_authorized": true|false|null,
+      "issues": ["<string>"]
+    },
+    "dkim": {
+      "header_result": "pass|fail|perm_fail|tempfail|none|missing",
+      "selector": "<selector or null>",
+      "signing_domain": "<d= value or null>",
+      "key_exists_in_dns": true|false|null,
+      "algorithm": "<rsa-sha256|rsa-sha1|ed25519-sha256|null>",
+      "issues": ["<string>"]
+    },
+    "dmarc": {
+      "header_result": "pass|fail|missing",
+      "policy": "none|quarantine|reject|missing",
+      "pct": 0-100,
+      "alignment_spf": "pass|fail|null",
+      "alignment_dkim": "pass|fail|null",
+      "record_exists": true|false,
+      "issues": ["<string>"]
+    },
+    "arc_present": true|false,
+    "overall_auth_assessment": "<one sentence summary>"
+  },
+  "infrastructure": {
+    "sending_ip": "<IP or null>",
+    "ptr_hostname": "<PTR or null>",
+    "fcrDNS": "pass|fail|null",
+    "ehlo_hostname": "<EHLO value or null>",
+    "ip_classification": "cloud_esp|datacenter|residential|vpn|unknown",
+    "asn_org": "<ASN org name or null>",
+    "routing_hops": <int>
+  },
+  "rbl": {
+    "checked": true|false,
+    "listed_count": <int>,
+    "listings": [
+      {"rbl": "<name>", "code": "<return code>", "reason": "<decoded reason>"}
+    ],
+    "analysis_date": "<YYYY-MM-DD>",
+    "temporal_caveat_applies": true|false,
+    "days_since_delivery": <int or null>
+  },
+  "domain_intel": {
+    "from_domain": "<domain>",
+    "domain_status": "<active|serverHold|clientHold|pendingDelete|null>",
+    "mx_records_exist": true|false,
+    "spf_record_exists": true|false,
+    "dmarc_record_exists": true|false,
+    "rdap_creation_date": "<YYYY-MM-DD or null>",
+    "domain_age_days_at_delivery": <int or null>,
+    "registrar": "<name or null>"
+  },
+  "urls": {
+    "total_count": <int>,
+    "unique_domains": ["<domain>"],
+    "suspicious_domains": ["<domain>"],
+    "uses_http_only": true|false,
+    "contains_tracking_pixel": true|false,
+    "redirect_chains_present": true|false
+  },
+  "red_flags": ["<brief flag description>"],
+  "rationale_summary": "<2-3 sentence plain-English summary of verdict rationale>",
+  "session_stats": {
+    "total_tool_calls": <int>,
+    "tool_breakdown": {"<tool_name>": <call_count>},
+    "errors": <int>,
+    "uptime_seconds": <float>
+  }
+}
+---END-FORENSICS-JSON---

@@ -165,45 +165,51 @@ MSG
   # Write full narrative
   cp "$raw_out" "$txt_out"
 
-  # Extract the structured JSON line the prompt emits on line 2 of the report body.
-  # Format: {"date":"YYYYMMDD","from":"...","verdict":"...","delivery_date":"...","delivery_date_source":"..."}
-  # Also extract confidence from the verdict section if present.
+  # Extract the JSON block delimited by ---BEGIN-FORENSICS-JSON--- / ---END-FORENSICS-JSON---
+  # Falls back to header-line parsing if the block is absent.
   python3 - "$raw_out" "$json_out" <<'PYEOF'
 import sys, json, re
 
 text = open(sys.argv[1]).read()
+data = None
 
-# Find the structured data line the prompt emits
-# It's a JSON object starting with {"date":
-match = re.search(r'\{"date"\s*:.*?\}', text)
-if match:
+# Primary: sentinel-delimited JSON block
+m = re.search(
+    r'---BEGIN-FORENSICS-JSON---\s*(.*?)\s*---END-FORENSICS-JSON---',
+    text, re.DOTALL
+)
+if m:
     try:
-        data = json.loads(match.group(0))
-    except json.JSONDecodeError:
-        data = {"raw": match.group(0)}
-else:
+        data = json.loads(m.group(1))
+    except json.JSONDecodeError as e:
+        data = {"parse_error": str(e), "raw_block": m.group(1)[:500]}
+
+# Fallback: old one-liner {"date":...} line
+if data is None:
+    m2 = re.search(r'\{"date"\s*:.*?\}', text)
+    if m2:
+        try:
+            data = json.loads(m2.group(0))
+        except json.JSONDecodeError:
+            data = {}
+
+if data is None:
     data = {}
 
-# Extract verdict from the report header line if structured line is absent
-# Header format: YYYYMMDD – exact_from_address – VERDICT
+# Fallback: pull verdict from header line if still missing
 if "verdict" not in data:
     hdr = re.search(
-        r'^\d{8}\s*[–-]\s*\S+\s*[–-]\s*(TRUSTABLE|SUSPICIOUS|PHISHING|FURTHER ANALYSIS REQUIRED)',
+        r'^\d{8}\s*[–\-]\s*\S+\s*[–\-]\s*(TRUSTABLE|SUSPICIOUS|PHISHING|FURTHER ANALYSIS REQUIRED)',
         text, re.MULTILINE
     )
     if hdr:
         data["verdict"] = hdr.group(1)
 
-# Extract confidence
-conf = re.search(
-    r'Confidence[:\s]+(High|Medium|Low)',
-    text, re.IGNORECASE
-)
-if conf:
-    data["confidence"] = conf.group(1).capitalize()
-
-# Source file hint
-data["analysis_file"] = sys.argv[1].split("/")[-1].replace("raw-", "forensics-").replace(".txt", ".txt")
+# Fallback: confidence
+if "confidence" not in data:
+    conf = re.search(r'Confidence[:\s]+(High|Medium|Low)', text, re.IGNORECASE)
+    if conf:
+        data["confidence"] = conf.group(1).capitalize()
 
 with open(sys.argv[2], "w") as f:
     json.dump(data, f, indent=2)
@@ -211,10 +217,17 @@ with open(sys.argv[2], "w") as f:
 # Print summary to stdout
 verdict = data.get("verdict", "UNKNOWN")
 confidence = data.get("confidence", "")
-from_addr = data.get("from", "")
+from_addr = (data.get("identity") or {}).get("from_address") or data.get("from", "")
+listed = (data.get("rbl") or {}).get("listed_count")
+tools = (data.get("session_stats") or {}).get("total_tool_calls")
+
 print(f"  Verdict:    {verdict}" + (f"  ({confidence} confidence)" if confidence else ""))
 if from_addr:
     print(f"  From:       {from_addr}")
+if listed is not None:
+    print(f"  RBL hits:   {listed}")
+if tools is not None:
+    print(f"  Tool calls: {tools}")
 PYEOF
 
   echo ""
