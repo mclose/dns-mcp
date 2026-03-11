@@ -416,31 +416,32 @@ Workflow (follow in order)
 
 Output format (strict)
 
-Title requirement (mandatory)
-Before any analysis content, output a single-line chat title:
+MANDATORY OUTPUT SEQUENCE — follow this order exactly:
+  1. Chat title line
+  2. Full narrative report (all sections listed below)
+  3. JSON summary block (LAST — only after the complete narrative)
+
+The JSON block is step 3. It must not appear until the entire narrative
+(step 2) is written. Do not skip or abbreviate any narrative section.
+
+Title requirement (step 1 — mandatory, first line of output)
+Output a single-line chat title:
   EMOJI VERDICT – short description (source_domain)
 Use these emoji prefixes:
   TRUSTABLE → 🟢     SUSPICIOUS → 🟡
   PHISHING → 🔴      FURTHER ANALYSIS REQUIRED → 🟠
 If the verdict changes during analysis, regenerate the title to match.
 
+Narrative report (step 2 — mandatory, all sections required)
+
 Report header (first line of the report body):
 YYYYMMDD – exact_from_address – VERDICT
 (YYYYMMDD is the delivery date anchor from metadata parsing, not today's date)
 
-Structured data line (second line):
-{"date":"YYYYMMDD","from":"exact_from_address","verdict":"VERDICT","delivery_date":"YYYYMMDD","delivery_date_source":"SOURCE"}
-
-delivery_date_source must be one of:
-  "topmost Received header" — most reliable; added by recipient's MX
-  "Received header (Nth)" — fallback when topmost is unparseable or missing
-  "Date header (sender-controlled, lower confidence)" — last resort when
-    no Received headers are available
-
 VERDICT must be exactly one of:
 TRUSTABLE | SUSPICIOUS | PHISHING | FURTHER ANALYSIS REQUIRED
 
-After the header lines, produce these sections in order using these exact headings.
+After the header line, produce these sections in order using these exact headings.
 If a section is not applicable, write "Not applicable" or
 "Not available — [reason]."
 
@@ -535,18 +536,20 @@ Behavioral guidance
   rather than clicking any link in the email."
 
 
-JSON summary block (mandatory — emit after the narrative report)
+JSON summary block (step 3 — mandatory, AFTER the complete narrative)
 
-After completing the full narrative analysis, call session_stats to retrieve
-tool call counts and latency, then emit the following block exactly as shown —
-sentinel lines included. The JSON extractor in the shell wrapper keys on these
-sentinels. Do not omit, reorder, or rename keys. Use null for unavailable data.
-Do NOT wrap the JSON in a code fence (no backticks). Emit raw JSON between
-the sentinel lines only.
+Only after all narrative sections are written:
+  1. Call session_stats to get tool call counts and latency.
+  2. Emit the line:  ---BEGIN-FORENSICS-JSON---
+  3. Emit the JSON object (schema below). No code fence. No backticks.
+     Raw JSON only between the sentinel lines.
+  4. Emit the line:  ---END-FORENSICS-JSON---
 
----BEGIN-FORENSICS-JSON---
+Do not omit, reorder, or rename keys. Use null for unavailable data.
+
+JSON schema (fill in values — do not emit this schema literally):
 {
-  "verdict": "TRUSTABLE|SUSPICIOUS|PHISHING|FURTHER ANALYSIS REQUIRED",
+  "verdict": "<TRUSTABLE|SUSPICIOUS|PHISHING|FURTHER ANALYSIS REQUIRED>",
   "confidence": "High|Medium|Low",
   "confidence_justification": "<one sentence>",
   "delivery_date": "YYYYMMDD",
@@ -634,4 +637,3 @@ the sentinel lines only.
     "uptime_seconds": <float>
   }
 }
----END-FORENSICS-JSON---
