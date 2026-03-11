@@ -32,11 +32,10 @@ Working backlog. Items are roughly priority-ordered within each section.
 
 ## Scripts
 
-- [ ] `tools/soc_email_forensics.sh` — wrap the `soc_email_forensics` MCP prompt;
-  accept a raw `.eml` file as a positional argument (or stdin), pipe it into the
-  prompt, return the verdict (TRUSTABLE / SUSPICIOUS / PHISHING / FURTHER ANALYSIS
-  REQUIRED) as text. Mirror the structure of `email_security_posture_claude.sh`:
-  temp dir, trap cleanup, `-y/--yes` flag, model flag.
+- [x] `tools/soc_email_forensics.sh` — wraps the `soc_email_forensics` MCP prompt;
+  accepts one or more raw `.eml`/`.txt` files (or stdin via `-`); writes a full
+  narrative `.txt` report and extracts the structured JSON summary line to `.json`.
+  Supports `-y/--yes` auto-approve and multiple file arguments.
 
 ---
 
@@ -137,9 +136,10 @@ Working backlog. Items are roughly priority-ordered within each section.
 
 ## Prompt improvements
 
-- [ ] **`soc_email_forensics` prompt** — currently untested against real phishing
-  samples. Run against the test email folder and refine verdict logic / header
-  extraction steps based on results.
+- [x] **`soc_email_forensics` prompt** — tested against 3 real samples (DHL phish,
+  CGI phishing simulation, fadv.com background check). Added `check_rbl` to
+  workflow with per-RBL significance notes and RBL temporal gap caveat (>7 days
+  → include staleness warning in report).
 
 ---
 
