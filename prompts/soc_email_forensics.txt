@@ -541,6 +541,8 @@ After completing the full narrative analysis, call session_stats to retrieve
 tool call counts and latency, then emit the following block exactly as shown —
 sentinel lines included. The JSON extractor in the shell wrapper keys on these
 sentinels. Do not omit, reorder, or rename keys. Use null for unavailable data.
+Do NOT wrap the JSON in a code fence (no backticks). Emit raw JSON between
+the sentinel lines only.
 
 ---BEGIN-FORENSICS-JSON---
 {

@@ -179,10 +179,13 @@ m = re.search(
     text, re.DOTALL
 )
 if m:
+    # Strip markdown code fence if Claude wrapped the block in ```json ... ```
+    block = re.sub(r'^\s*```[a-z]*\s*', '', m.group(1).strip())
+    block = re.sub(r'\s*```\s*$', '', block)
     try:
-        data = json.loads(m.group(1))
+        data = json.loads(block)
     except json.JSONDecodeError as e:
-        data = {"parse_error": str(e), "raw_block": m.group(1)[:500]}
+        data = {"parse_error": str(e), "raw_block": block[:500]}
 
 # Fallback: old one-liner {"date":...} line
 if data is None:
