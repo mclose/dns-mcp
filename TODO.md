@@ -11,6 +11,22 @@ Working backlog. Items are roughly priority-ordered within each section.
   PTR, SRV, DNSKEY, DS, TLSA, CAA, SSHFP, RRSIG, CDS, CDNSKEY, HTTPS, SVCB, NAPTR.
   `nsec_info` has no record_type param (not applicable).
 
+- [ ] **`dns_query` silently follows CNAME chains** — when a name is a CNAME,
+  `dns_query` resolves the full chain and returns only the final A/AAAA records,
+  hiding the CNAME record itself. A query for `www.yahoo.com A` returns two A
+  addresses when the authoritative answer is actually a CNAME to
+  `me-ycpi-cf-www.g06.yahoodns.net.` (TTL 60s). Two sub-issues:
+  1. **Silent CNAME following**: the CNAME hop is invisible in the response.
+     Fix: when the answer section contains a CNAME, surface it explicitly
+     alongside or instead of the resolved A records, and note the chain.
+  2. **Cached TTL vs. authoritative TTL**: querying a recursive resolver
+     (e.g. 9.9.9.9) returns the *remaining* cache TTL, not the zone TTL.
+     Querying the authoritative NS directly with `+norec` (`RD=0`) gives the
+     true zone TTL. `dns_dig_style` is closer to correct but still doesn't
+     enforce `+norec`. Add a `norec` / `authoritative` flag (or document the
+     gap) so callers know they need to target the auth NS directly with
+     `dns_dig_style` to get the real TTL.
+
 - [ ] **`check_rbl(ip)` tool** — query common RBLs (Spamhaus zen, SpamCop, SORBS, Barracuda,
   UCEProtect 1/2, Mailspike, PSBL) for a given IPv4/IPv6 address. Reverse the octets,
   query `{reversed}.{rbl}` for an A record. Return per-RBL listed/clean status and any
@@ -98,6 +114,10 @@ Working backlog. Items are roughly priority-ordered within each section.
 ---
 
 ## New tools
+
+> **Prompt library**: `~/dns-mcp_new_tools_prompts/` — a collection of detailed
+> implementation prompts for candidate tools below. Pick one up and paste it in to
+> kick off a new tool session.
 
 ### Email / threat intelligence (DNS-native)
 

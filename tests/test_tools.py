@@ -533,20 +533,71 @@ class TestReverseDns:
 
 class TestDnssecValidate:
     def test_signed_domain(self):
-        """cloudflare.com is DNSSEC-signed"""
+        """cloudflare.com is DNSSEC-signed — must reach fully validated"""
         result = dns_dnssec_validate("cloudflare.com", "A", nameserver="9.9.9.9")
         assert "error" not in result
         assert result["domain"] == "cloudflare.com"
         assert "chain_of_trust" in result
-        assert len(result["chain_of_trust"]) > 0
-        # Root should be secure
         assert result["chain_of_trust"][0]["status"] == "secure"
+        assert result["overall_status"] == "fully validated"
+
+    def test_signed_domain_aaaa(self):
+        """cloudflare.com AAAA must also reach fully validated"""
+        result = dns_dnssec_validate("cloudflare.com", "AAAA", nameserver="9.9.9.9")
+        assert "error" not in result
+        assert result["overall_status"] == "fully validated"
+
+    def test_zone_apex_validates_secure(self):
+        """Zone apex A record (deflationhollow.net) must walk its own DS/DNSKEY step"""
+        result = dns_dnssec_validate("deflationhollow.net", "A", nameserver="9.9.9.9")
+        assert "error" not in result
+        assert result["overall_status"] == "fully validated"
+
+    def test_sub_zone_hostname_validates_secure(self):
+        """Hostname inside a sub-zone (claude.lab.deflationhollow.net) must reach
+        fully validated — regression test for no_dnskey false-insecure bug where
+        the chain walk tried to treat the hostname itself as a zone apex."""
+        result = dns_dnssec_validate(
+            "claude.lab.deflationhollow.net", "A", nameserver="9.9.9.9"
+        )
+        assert "error" not in result
+        assert result["overall_status"] == "fully validated"
+        assert result["resolver_ad_flag"] is True
+        assert "discrepancy" not in result
+
+    def test_sub_zone_apex_nsec_negative_validates_secure(self):
+        """lab.deflationhollow.net has no A record, but NSEC proves it securely.
+        delv reports: 'negative response, fully validated' — we must match that."""
+        result = dns_dnssec_validate(
+            "lab.deflationhollow.net", "A", nameserver="9.9.9.9"
+        )
+        assert "error" not in result
+        assert result["overall_status"] == "fully validated"
+        target = next(s for s in result["chain_of_trust"] if "target" in s)
+        assert target["fully_validated"] is True
+        assert target.get("negative_response") is True
+
+    def test_sub_zone_apex_existing_record_validates_secure(self):
+        """lab.deflationhollow.net NS record exists and must reach fully validated"""
+        result = dns_dnssec_validate(
+            "lab.deflationhollow.net", "NS", nameserver="9.9.9.9"
+        )
+        assert "error" not in result
+        assert result["overall_status"] == "fully validated"
+
+    def test_nsec_test_zone_validates_secure(self):
+        """nsec-test.deflationhollow.net is DNSSEC-signed (NSEC) — must validate"""
+        result = dns_dnssec_validate(
+            "nsec-test.deflationhollow.net", "SOA", nameserver="9.9.9.9"
+        )
+        assert "error" not in result
+        assert result["overall_status"] == "fully validated"
 
     def test_unsigned_domain(self):
-        """example.com — result depends on DNSSEC chain state"""
-        result = dns_dnssec_validate("example.com", "A", nameserver="9.9.9.9")
+        """craigslist.org has no DNSKEY — must be insecure, not bogus"""
+        result = dns_dnssec_validate("craigslist.org", "A", nameserver="9.9.9.9")
         assert "error" not in result
-        assert result["overall_status"] in ("insecure", "fully validated", "bogus")
+        assert result["overall_status"] == "insecure"
 
     def test_nxdomain(self):
         result = dns_dnssec_validate(
@@ -561,12 +612,6 @@ class TestDnssecValidate:
     def test_invalid_nameserver(self):
         result = dns_dnssec_validate("cloudflare.com", "A", nameserver="bad")
         assert "error" in result
-
-    def test_zone_apex_validates_secure(self):
-        """Zone apex query (deflationhollow.net) must walk its own DS/DNSKEY step"""
-        result = dns_dnssec_validate("deflationhollow.net", "A", nameserver="9.9.9.9")
-        assert "error" not in result
-        assert result["overall_status"] == "fully validated"
 
 
 # ===========================================================================

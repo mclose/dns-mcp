@@ -1456,14 +1456,51 @@ def dns_dnssec_validate(
                     )
                     target_step["fully_validated"] = False
             else:
-                # Check authority section for SOA (NXDOMAIN or no data)
+                # No answer — attempt NSEC/NSEC3 negative proof validation.
+                # A signed NSEC denial is a fully-validated negative response,
+                # equivalent to delv reporting "negative response, fully validated".
                 if target_response.rcode() == dns.rcode.NXDOMAIN:
                     target_step["status"] = "nxdomain"
                     target_step["error"] = "Domain does not exist"
+                    target_step["fully_validated"] = False
                 else:
-                    target_step["status"] = "no_answer"
-                    target_step["error"] = f"No {record_type} records found"
-                target_step["fully_validated"] = False
+                    # NXRRSET — look for NSEC/NSEC3 in authority section
+                    nsec_rrset = None
+                    nsec_rrsig = None
+                    for rrset in target_response.authority:
+                        if rrset.rdtype in (dns.rdatatype.NSEC, dns.rdatatype.NSEC3):
+                            nsec_rrset = rrset
+                        elif rrset.rdtype == dns.rdatatype.RRSIG:
+                            nsec_rrsig = rrset
+
+                    if nsec_rrset and nsec_rrsig and parent_dnskeys:
+                        try:
+                            signer_name = nsec_rrsig[0].signer
+                            dns.dnssec.validate(
+                                nsec_rrset, nsec_rrsig, {signer_name: parent_dnskeys}
+                            )
+                            nsec_type = dns.rdatatype.to_text(nsec_rrset.rdtype)
+                            target_step["validations"].append(
+                                {
+                                    "action": f"verify {nsec_type} denial",
+                                    "keyid": nsec_rrsig[0].key_tag,
+                                    "result": f"success (no {record_type} proven by {nsec_type})",
+                                }
+                            )
+                            target_step["status"] = "secure"
+                            target_step["fully_validated"] = True
+                            target_step["negative_response"] = True
+                            target_step["denial_type"] = nsec_type
+                        except dns.dnssec.ValidationFailure as e:
+                            target_step["status"] = "bogus"
+                            target_step["error"] = (
+                                f"{nsec_type} denial validation failed: {e}"
+                            )
+                            target_step["fully_validated"] = False
+                    else:
+                        target_step["status"] = "no_answer"
+                        target_step["error"] = f"No {record_type} records found"
+                        target_step["fully_validated"] = False
 
         except Exception as e:
             target_step["status"] = "error"
@@ -1472,8 +1509,21 @@ def dns_dnssec_validate(
 
         validation_chain.append(target_step)
 
-        # Determine overall validation result
-        all_secure = all(step.get("status") == "secure" for step in validation_chain)
+        # Determine overall validation result.
+        # Exclude no_dnskey zone steps: these are hostname nodes (e.g.
+        # claude.lab.example.com) that the chain walk tries as zones but
+        # which have no DS and no DNSKEY — not a real zone, not a failure.
+        zone_steps_secure = all(
+            step.get("status") == "secure"
+            for step in validation_chain
+            if "zone" in step and step.get("status") != "no_dnskey"
+        )
+        target_validated = any(
+            step.get("fully_validated") is True
+            for step in validation_chain
+            if "target" in step
+        )
+        all_secure = zone_steps_secure and target_validated
         any_bogus = any(step.get("status") == "bogus" for step in validation_chain)
 
         if any_bogus:
