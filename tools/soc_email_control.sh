@@ -10,6 +10,7 @@
 set -euo pipefail
 
 MODEL=claude-sonnet-4-6
+SHOW_PROMPT=false
 POSITIONAL=()
 SKIP_NEXT=false
 PREV_ARG=""
@@ -24,6 +25,7 @@ for arg in "$@"; do
   fi
   case "$arg" in
     -m|--model) PREV_ARG="$arg"; SKIP_NEXT=true ;;
+    --show-prompt) SHOW_PROMPT=true ;;
     -h|--help)
       echo "Usage: $(basename "$0") [options] <email.txt|->"
       echo ""
@@ -32,6 +34,7 @@ for arg in "$@"; do
       echo ""
       echo "Options:"
       echo "  -m, --model MODEL  Claude model (default: claude-sonnet-4-6)"
+      echo "  --show-prompt      Print the system prompt and exit"
       echo "  -h, --help         Show this help"
       echo ""
       echo "Examples:"
@@ -44,9 +47,11 @@ for arg in "$@"; do
   esac
 done
 
-if [ ${#POSITIONAL[@]} -eq 0 ]; then
-  echo "ERROR: no email file specified. Use - to read from stdin." >&2
-  exit 1
+SYSTEM_PROMPT="I work in a SOC and I analyze email to see if it's phishing or trustable."
+
+if [ "$SHOW_PROMPT" = true ]; then
+  echo "$SYSTEM_PROMPT"
+  exit 0
 fi
 
 if ! command -v claude >/dev/null 2>&1; then
@@ -64,8 +69,6 @@ else
   exit 1
 fi
 
-SYSTEM_PROMPT="I work in a SOC and I analyze email to see if it's phishing or trustable."
-
 USER_MSG="$(cat <<MSGEOF
 Analyze the following raw email and tell me if it is phishing or trustable.
 
@@ -77,6 +80,9 @@ MSGEOF
 
 echo "── Model:  $MODEL"
 echo "── No MCP tools (control condition)"
+echo ""
+
+echo "── Command: claude -p \"<email: $INPUT>\" --model $MODEL --strict-mcp-config --mcp-config '' --system-prompt \"<system prompt>\""
 echo ""
 
 claude \
