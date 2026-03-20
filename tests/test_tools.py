@@ -1709,43 +1709,75 @@ class TestDetectHijacking:
 
 class TestPrompts:
     def test_email_security_audit_returns_string(self):
-        """email_security_audit() returns a non-empty string"""
-        result = email_security_audit()
+        """email_security_audit() with no args returns a non-empty string"""
+        result = email_security_audit(domain=None)
         assert isinstance(result, str)
         assert len(result) > 0
 
     def test_email_security_audit_content(self):
         """email_security_audit() content identifies it as the correct prompt"""
-        result = email_security_audit()
+        result = email_security_audit(domain=None)
         assert "email security auditor" in result
         assert "DMARC" in result
         assert "DKIM" in result
 
+    def test_email_security_audit_with_domain_returns_list(self):
+        """email_security_audit(domain=...) returns [system_text, domain] so user input is not lost"""
+        result = email_security_audit(domain="example.com")
+        assert isinstance(result, list)
+        assert len(result) == 2
+        assert "email security auditor" in result[0]
+        assert result[1] == "example.com"
+
     def test_dnssec_chain_audit_returns_string(self):
-        """dnssec_chain_audit() returns a non-empty string"""
-        result = dnssec_chain_audit()
+        """dnssec_chain_audit() with no args returns a non-empty string"""
+        result = dnssec_chain_audit(domain=None, record_type=None)
         assert isinstance(result, str)
         assert len(result) > 0
 
     def test_dnssec_chain_audit_content(self):
         """dnssec_chain_audit() content identifies it as the correct prompt"""
-        result = dnssec_chain_audit()
+        result = dnssec_chain_audit(domain=None, record_type=None)
         assert "chain-of-trust" in result
         assert "dns_dnssec_validate" in result
         assert "nsec_info" in result
 
+    def test_dnssec_chain_audit_with_domain_returns_list(self):
+        """dnssec_chain_audit(domain=...) returns [system_text, domain] so user input is not lost"""
+        result = dnssec_chain_audit(domain="example.com", record_type=None)
+        assert isinstance(result, list)
+        assert len(result) == 2
+        assert "chain-of-trust" in result[0]
+        assert result[1] == "example.com"
+
+    def test_dnssec_chain_audit_with_domain_and_record_type(self):
+        """dnssec_chain_audit with both args includes record type in user message"""
+        result = dnssec_chain_audit(domain="example.com", record_type="MX")
+        assert isinstance(result, list)
+        assert len(result) == 2
+        assert result[1] == "example.com MX"
+
     def test_soc_email_forensics_returns_string(self):
-        """soc_email_forensics() returns a non-empty string"""
-        result = soc_email_forensics()
+        """soc_email_forensics() with no args returns a non-empty string"""
+        result = soc_email_forensics(email_content=None)
         assert isinstance(result, str)
         assert len(result) > 0
 
     def test_soc_email_forensics_content(self):
         """soc_email_forensics() content identifies it as the correct prompt"""
-        result = soc_email_forensics()
+        result = soc_email_forensics(email_content=None)
         assert "phishing" in result.lower()
         assert "DKIM" in result
         assert "TRUSTABLE" in result
+
+    def test_soc_email_forensics_with_content_returns_list(self):
+        """soc_email_forensics(email_content=...) returns [system_text, email] so user input is not lost"""
+        raw_email = "From: test@example.com\nSubject: Test"
+        result = soc_email_forensics(email_content=raw_email)
+        assert isinstance(result, list)
+        assert len(result) == 2
+        assert "phishing" in result[0].lower()
+        assert result[1] == raw_email
 
 
 # ---------------------------------------------------------------------------

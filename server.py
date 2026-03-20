@@ -4060,21 +4060,38 @@ def check_ct_logs(
 
 
 @mcp.prompt()
-def email_security_audit() -> str:
+def email_security_audit(
+    domain: str | None = Field(default=None, description="Domain to audit (e.g. 'example.com')"),
+) -> list[str] | str:
     """Audit the email security posture of a domain (SPF, DKIM, DMARC, MTA-STS, BIMI). Grades A–F."""
-    return (_PROMPT_DIR / "email_security_audit.txt").read_text()
+    text = (_PROMPT_DIR / "email_security_audit.txt").read_text()
+    if domain:
+        return [text, domain]
+    return text
 
 
 @mcp.prompt()
-def dnssec_chain_audit() -> str:
+def dnssec_chain_audit(
+    domain: str | None = Field(default=None, description="Domain to validate (e.g. 'example.com')"),
+    record_type: str | None = Field(default=None, description="DNS record type to validate (default: A)"),
+) -> list[str] | str:
     """Full DNSSEC chain-of-trust audit from the IANA root trust anchor down to a target domain."""
-    return (_PROMPT_DIR / "dnssec_chain_audit.txt").read_text()
+    text = (_PROMPT_DIR / "dnssec_chain_audit.txt").read_text()
+    if domain:
+        user_msg = domain if record_type is None else f"{domain} {record_type}"
+        return [text, user_msg]
+    return text
 
 
 @mcp.prompt()
-def soc_email_forensics() -> str:
+def soc_email_forensics(
+    email_content: str | None = Field(default=None, description="Raw email to analyse (.eml or pasted headers/text)"),
+) -> list[str] | str:
     """Forensic phishing analysis of a raw email (.eml or pasted headers). Returns TRUSTABLE / SUSPICIOUS / PHISHING / FURTHER ANALYSIS REQUIRED."""
-    return (_PROMPT_DIR / "soc_email_forensics.txt").read_text()
+    text = (_PROMPT_DIR / "soc_email_forensics.txt").read_text()
+    if email_content:
+        return [text, email_content]
+    return text
 
 
 # ---------------------------------------------------------------------------

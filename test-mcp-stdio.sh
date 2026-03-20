@@ -282,19 +282,47 @@ else
 fi
 echo ""
 
-echo -e "${YELLOW}[31] Get Prompt - email_security_audit${NC}"
+echo -e "${YELLOW}[31] Get Prompt - email_security_audit (no args)${NC}"
 PROMPT_GET_BODY='{"jsonrpc":"2.0","id":31,"method":"prompts/get","params":{"name":"email_security_audit"}}'
 echo "$PROMPT_GET_BODY" | jq .
 echo "$PROMPT_GET_BODY" >&3
 if read -t 10 -r PROMPT_GET_RESPONSE <&4; then
     PROMPT_TEXT=$(echo "$PROMPT_GET_RESPONSE" | jq -r '.result.messages[0].content.text // empty' 2>/dev/null)
+    MSG_COUNT=$(echo "$PROMPT_GET_RESPONSE" | jq '.result.messages | length' 2>/dev/null)
     if echo "$PROMPT_TEXT" | grep -q "email security auditor"; then
         echo -e "  Content verified (contains 'email security auditor')"
         echo "$PROMPT_GET_RESPONSE" | jq '{id: .id, messages_count: (.result.messages | length)}'
-        PASS=$((PASS + 1))
+        if [ "$MSG_COUNT" -eq 1 ]; then
+            echo -e "  Correct: 1 message (no user input provided)"
+            PASS=$((PASS + 1))
+        else
+            echo -e "${RED}  FAILED - expected 1 message without args, got ${MSG_COUNT}${NC}"
+            FAIL=$((FAIL + 1))
+        fi
     else
         echo -e "${RED}  FAILED - prompt content missing expected text${NC}"
         echo "$PROMPT_GET_RESPONSE" | jq .
+        FAIL=$((FAIL + 1))
+    fi
+else
+    echo -e "${RED}  FAILED - no response (10s timeout)${NC}"
+    FAIL=$((FAIL + 1))
+fi
+echo ""
+
+echo -e "${YELLOW}[31b] Get Prompt - email_security_audit (with domain arg)${NC}"
+PROMPT_GET_WITH_ARG_BODY='{"jsonrpc":"2.0","id":31,"method":"prompts/get","params":{"name":"email_security_audit","arguments":{"domain":"example.com"}}}'
+echo "$PROMPT_GET_WITH_ARG_BODY" | jq .
+echo "$PROMPT_GET_WITH_ARG_BODY" >&3
+if read -t 10 -r PROMPT_GET_ARG_RESPONSE <&4; then
+    MSG_COUNT=$(echo "$PROMPT_GET_ARG_RESPONSE" | jq '.result.messages | length' 2>/dev/null)
+    SECOND_MSG=$(echo "$PROMPT_GET_ARG_RESPONSE" | jq -r '.result.messages[1].content.text // empty' 2>/dev/null)
+    if [ "$MSG_COUNT" -eq 2 ] && [ "$SECOND_MSG" = "example.com" ]; then
+        echo -e "  Correct: 2 messages; user input 'example.com' forwarded as second message"
+        PASS=$((PASS + 1))
+    else
+        echo -e "${RED}  FAILED - expected 2 messages with domain forwarded, got ${MSG_COUNT} messages, second='${SECOND_MSG}'${NC}"
+        echo "$PROMPT_GET_ARG_RESPONSE" | jq .
         FAIL=$((FAIL + 1))
     fi
 else
