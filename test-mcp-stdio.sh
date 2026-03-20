@@ -140,7 +140,7 @@ sleep 0.5
 
 # ── Test 2: List tools ───────────────────────────────────────
 
-echo -e "${YELLOW}[2] List Tools (expect 23)${NC}"
+echo -e "${YELLOW}[2] List Tools (expect 27)${NC}"
 LIST_BODY='{"jsonrpc":"2.0","id":2,"method":"tools/list"}'
 echo "$LIST_BODY" | jq .
 echo "$LIST_BODY" >&3
@@ -152,10 +152,10 @@ if read -t 10 -r LIST_RESPONSE <&4; then
     echo -e "  Tools found: ${TOOL_COUNT}"
     echo "$TOOL_NAMES" | while read -r name; do echo "    - $name"; done
 
-    if [ "$TOOL_COUNT" -ge 26 ]; then
+    if [ "$TOOL_COUNT" -ge 27 ]; then
         PASS=$((PASS + 1))
     else
-        echo -e "${RED}  EXPECTED 26 tools, got ${TOOL_COUNT}${NC}"
+        echo -e "${RED}  EXPECTED 27 tools, got ${TOOL_COUNT}${NC}"
         FAIL=$((FAIL + 1))
     fi
 else
@@ -255,6 +255,9 @@ call_tool 29 "cymru_asn - 8.8.8.8 (expect AS15169 Google)" \
 
 call_tool 30 "check_fast_flux - google.com (stable domain, no flux)" \
     '{"jsonrpc":"2.0","id":30,"method":"tools/call","params":{"name":"check_fast_flux","arguments":{"domain":"google.com","nameserver":"9.9.9.9","query_count":3,"delay_seconds":0.0}}}'
+
+call_tool 32 "check_ct_logs - deflationhollow.net" \
+    '{"jsonrpc":"2.0","id":32,"method":"tools/call","params":{"name":"check_ct_logs","arguments":{"domain":"deflationhollow.net","include_expired":false}}}'
 
 # ── Analyst Prompts ───────────────────────────────────────────
 

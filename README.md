@@ -43,6 +43,7 @@ through any MCP-compatible assistant in real time.
 | `check_dbl` | Domain reputation check against DNS-based Domain Block Lists (Spamhaus DBL, URIBL, SURBL) |
 | `cymru_asn` | ASN lookup via Team Cymru DNS service — BGP prefix, org name, country, and high-risk ASN flag |
 | `check_fast_flux` | Fast-flux detection — repeated A/AAAA queries to identify rotating IPs and suspiciously short TTLs; signals botnet/phishing infrastructure |
+| `check_ct_logs` | Certificate Transparency log enumeration via crt.sh — unique subdomain names, per-cert issuer/validity details, wildcard detection, and CAA cross-reference with correct O= field mapping |
 
 ### Utility
 | Tool | Description |
@@ -273,7 +274,7 @@ docker run --rm -i dns-mcp python server.py
   | stdin/stdout (MCP stdio transport)
   v
 FastMCP server (server.py)
-  |  - All 26 tools
+  |  - All 27 tools
   |  - dnspython for DNS queries
   |  - requests for RDAP only
 ```

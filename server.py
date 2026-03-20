@@ -37,6 +37,7 @@ Tools provided:
   - check_dbl: Domain reputation check against DNS-based Domain Block Lists (Spamhaus DBL, URIBL, SURBL)
   - cymru_asn: ASN lookup via Team Cymru DNS service (BGP prefix, org name, high-risk ASN flag)
   - check_fast_flux: Fast-flux detection — repeated A/AAAA queries to detect rotating IPs and short TTLs
+  - check_ct_logs: Certificate Transparency log enumeration via crt.sh — subdomain discovery, per-cert details, CAA cross-reference
 """
 
 from fastmcp import FastMCP
@@ -307,6 +308,29 @@ _HIGH_RISK_ASNS: dict[int, str] = {
     14061: "DigitalOcean — commodity cloud, notable abuse volume",
     63949: "Linode/Akamai — commodity cloud, notable abuse volume",
 }
+
+# CA organization → CAA identity mapping for CT log cross-reference.
+# Maps the O= field from issuer_name (stable across intermediate rotations)
+# to the domain used in CAA issue/issuewild tags.
+_ORG_TO_CAA_IDENTITY = {
+    "Let's Encrypt": "letsencrypt.org",
+    "Internet Security Research Group": "letsencrypt.org",  # ISRG root
+    "ZeroSSL": "sectigo.com",
+    "Sectigo Limited": "sectigo.com",
+    "Google Trust Services LLC": "pki.goog",
+    "Google Trust Services": "pki.goog",
+    "DigiCert Inc": "digicert.com",
+    "GlobalSign nv-sa": "globalsign.com",
+    "GlobalSign": "globalsign.com",
+    "Actalis S.p.A.": "actalis.it",
+    "SSL.com": "ssl.com",
+    "Buypass AS": "buypass.com",
+    "HARICA": "harica.gr",
+}
+
+_CT_MAX_RETRIES = 3
+_CT_TIMEOUT_SECONDS = 20
+_CT_BACKOFF = [0, 2, 5]  # seconds before each attempt
 
 # Hardcoded RDAP fallbacks for common TLDs
 _RDAP_FALLBACKS = {
@@ -2079,6 +2103,70 @@ def _fetch_mta_sts_policy(domain: str, errors: list) -> dict | None:
         return None
 
 
+def _fetch_ct_logs(domain: str, errors: list, fetch_metadata: dict) -> list:
+    """Fetch certificate data from crt.sh with retry/backoff.
+    Populates fetch_metadata dict in-place. Returns list of cert dicts (may be empty).
+    """
+    url = f"https://crt.sh/?q=%25.{domain}&output=json"
+    for attempt in range(_CT_MAX_RETRIES):
+        fetch_metadata["attempts"] = attempt + 1
+        if _CT_BACKOFF[attempt] > 0:
+            time.sleep(_CT_BACKOFF[attempt])
+        try:
+            resp = requests.get(url, timeout=_CT_TIMEOUT_SECONDS)
+        except requests.exceptions.Timeout:
+            errors.append(f"crt.sh timeout on attempt {attempt + 1}")
+            continue
+        except requests.exceptions.RequestException as e:
+            errors.append(f"crt.sh request failed: {e}")
+            continue
+
+        # Detect HTML error page
+        text = resp.text.strip()
+        if text and text[0] == "<":
+            errors.append(f"crt.sh returned HTML (attempt {attempt + 1})")
+            continue
+        # Detect empty body
+        if not text:
+            errors.append(f"crt.sh returned empty body (attempt {attempt + 1})")
+            continue
+        # Detect HTTP errors
+        if resp.status_code == 429:
+            errors.append(f"crt.sh rate limited (attempt {attempt + 1})")
+            time.sleep(10)
+            continue
+        if resp.status_code >= 500:
+            errors.append(f"crt.sh HTTP {resp.status_code} (attempt {attempt + 1})")
+            continue
+        if resp.status_code != 200:
+            errors.append(f"crt.sh HTTP {resp.status_code}")
+            break  # Non-retryable client error
+        # Parse JSON
+        try:
+            data = resp.json()
+        except ValueError:
+            errors.append(
+                f"crt.sh returned truncated/invalid JSON (attempt {attempt + 1})"
+            )
+            fetch_metadata["response_truncated"] = True
+            continue
+
+        fetch_metadata["success_on_attempt"] = attempt + 1
+        return data if isinstance(data, list) else []
+
+    fetch_metadata["error"] = errors[-1] if errors else "all retries exhausted"
+    return []
+
+
+def _parse_issuer_org(issuer_name: str) -> str | None:
+    """Extract the O= field from an RFC 4514 DN string."""
+    for part in issuer_name.split(","):
+        part = part.strip()
+        if part.startswith("O="):
+            return part[2:].strip()
+    return None
+
+
 @mcp.tool()
 @track("check_smtp_tlsrpt")
 def check_smtp_tlsrpt(
@@ -3739,6 +3827,229 @@ def check_fast_flux(
         "all_ips": sorted(all_ips),
         "flux_detected": flux_detected,
         "queries": queries,
+        "errors": errors,
+    }
+
+
+@mcp.tool()
+@track("check_ct_logs")
+def check_ct_logs(
+    domain: str = Field(
+        description="Apex domain to query CT logs for (e.g. deflationhollow.net)"
+    ),
+    include_expired: bool = Field(
+        default=False,
+        description="Include expired certificates in the results list (always counted in summary)",
+    ),
+) -> dict:
+    """
+    Query Certificate Transparency logs via crt.sh for a domain.
+
+    Returns all certificates logged for the domain and its subdomains,
+    including: unique names/SANs discovered (useful for subdomain enumeration),
+    per-cert details (issuer, validity, wildcard status), active vs expired
+    counts, and a CAA cross-reference that correctly maps intermediate CA
+    names to their parent CA identity (e.g. E7/E8 -> letsencrypt.org) rather
+    than doing a naive string comparison that produces false positives.
+
+    Retries automatically -- crt.sh is unreliable and frequently returns
+    empty responses or times out on the first attempt.
+    """
+    valid, result = validate_domain(domain)
+    if not valid:
+        return {"error": result, "domain": domain}
+
+    errors: list[str] = []
+    caa_warnings: list[dict] = []
+    caa_infos: list[dict] = []
+    caa_historical: list[dict] = []
+    fetch_metadata: dict = {
+        "attempts": 0,
+        "success_on_attempt": None,
+        "response_truncated": False,
+        "error": None,
+    }
+
+    raw_certs = _fetch_ct_logs(domain, errors, fetch_metadata)
+
+    # Deduplicate on crt.sh id (same cert logged to multiple logs)
+    seen_ids: set[int] = set()
+    unique_raw: list[dict] = []
+    for cert in raw_certs:
+        cid = cert.get("id")
+        if cid is not None and cid not in seen_ids:
+            seen_ids.add(cid)
+            unique_raw.append(cert)
+
+    # CAA lookup
+    caa_issue: list[str] = []
+    caa_issuewild: list[str] = []
+    caa_configured = False
+    try:
+        resolver = dns.resolver.Resolver()
+        resolver.nameservers = [DEFAULT_RESOLVER]
+        resolver.lifetime = 5.0
+        answers = resolver.resolve(domain, "CAA")
+        for rdata in answers:
+            tag = rdata.tag.decode() if isinstance(rdata.tag, bytes) else rdata.tag
+            value = (
+                rdata.value.decode() if isinstance(rdata.value, bytes) else rdata.value
+            )
+            if tag == "issue":
+                caa_issue.append(value.strip())
+                caa_configured = True
+            elif tag == "issuewild":
+                caa_issuewild.append(value.strip())
+                caa_configured = True
+    except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer, dns.resolver.NoNameservers):
+        pass
+    except dns.exception.Timeout:
+        errors.append("CAA lookup timed out")
+
+    # Process certs
+    now = datetime.now(timezone.utc)
+    all_names: set[str] = set()
+    certificates: list[dict] = []
+    active_count = expired_count = wildcard_count = 0
+    issuer_orgs_seen: set[str] = set()
+
+    for raw in unique_raw:
+        # Parse names
+        sans = [
+            n.strip() for n in (raw.get("name_value") or "").split("\n") if n.strip()
+        ]
+        if not sans:
+            sans = [raw.get("common_name", "")]
+        all_names.update(sans)
+
+        is_wildcard = any(n.startswith("*.") for n in sans)
+        if is_wildcard:
+            wildcard_count += 1
+
+        # Parse validity
+        not_after_str = raw.get("not_after", "")
+        try:
+            not_after = datetime.fromisoformat(not_after_str.replace("Z", "+00:00"))
+            if not_after.tzinfo is None:
+                not_after = not_after.replace(tzinfo=timezone.utc)
+            active = not_after > now
+        except (ValueError, AttributeError):
+            active = True
+            not_after = now  # fallback for days_since_expiry calculation
+
+        if active:
+            active_count += 1
+        else:
+            expired_count += 1
+
+        # Issuer parsing
+        issuer_name = raw.get("issuer_name", "")
+        issuer_org = _parse_issuer_org(issuer_name)
+        issuer_cn = None
+        for part in issuer_name.split(","):
+            part = part.strip()
+            if part.startswith("CN="):
+                issuer_cn = part[3:].strip()
+                break
+        if issuer_org:
+            issuer_orgs_seen.add(issuer_org)
+
+        caa_identity = _ORG_TO_CAA_IDENTITY.get(issuer_org) if issuer_org else None
+        caa_identity_unknown = issuer_org is not None and caa_identity is None
+
+        # CAA cross-reference (only if CAA is configured)
+        if caa_configured:
+            applicable_tags = caa_issuewild if is_wildcard else caa_issue
+            if not applicable_tags:
+                applicable_tags = caa_issue
+
+            cert_id = raw.get("id")
+            days_since_expiry = (now - not_after).days if not active else None
+
+            if caa_identity_unknown:
+                caa_historical.append(
+                    {
+                        "cert_id": cert_id,
+                        "permalink": f"https://crt.sh/?id={cert_id}",
+                        "severity": "NOTE",
+                        "unknown_issuer_org": issuer_org,
+                        "raw_issuer_name": issuer_name,
+                        "raw_issuer_cn": issuer_cn,
+                        "is_wildcard": is_wildcard,
+                        "suggestion": (
+                            "If this is a known CA, add it to _ORG_TO_CAA_IDENTITY in the source."
+                        ),
+                    }
+                )
+            elif caa_identity not in applicable_tags:
+                entry = {
+                    "cert_id": cert_id,
+                    "permalink": f"https://crt.sh/?id={cert_id}",
+                    "issuer_org": issuer_org,
+                    "caa_identity": caa_identity,
+                    "applicable_caa_tags": applicable_tags,
+                    "is_wildcard": is_wildcard,
+                    "note": (
+                        "DNS CAA records reflect current policy only -- this tool cannot "
+                        "determine whether the cert was issued before or after CAA was "
+                        "configured. This is not necessarily a violation."
+                    ),
+                }
+                if active:
+                    entry["severity"] = "WARN"
+                    caa_warnings.append(entry)
+                elif days_since_expiry is not None and days_since_expiry <= 30:
+                    entry["severity"] = "INFO"
+                    caa_infos.append(entry)
+                else:
+                    entry["severity"] = "NOTE"
+                    caa_historical.append(entry)
+
+        cert_entry = {
+            "id": raw.get("id"),
+            "permalink": f"https://crt.sh/?id={raw.get('id')}",
+            "common_name": raw.get("common_name"),
+            "sans": sans,
+            "is_wildcard": is_wildcard,
+            "issuer_cn": issuer_cn,
+            "issuer_org": issuer_org,
+            "caa_identity": caa_identity,
+            "caa_identity_unknown": caa_identity_unknown,
+            "not_before": raw.get("not_before"),
+            "not_after": not_after_str,
+            "active": active,
+            "logged_at": raw.get("logged_at"),
+        }
+
+        if include_expired or active:
+            certificates.append(cert_entry)
+
+    return {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "domain": domain,
+        "query": f"%.{domain}",
+        "crtsh_url": f"https://crt.sh/?q=%25.{domain}",
+        "summary": {
+            "total_certs": len(unique_raw),
+            "active_certs": active_count,
+            "expired_certs": expired_count,
+            "wildcard_certs": wildcard_count,
+            "unique_names": len(all_names),
+            "unique_issuers": len(issuer_orgs_seen),
+            "caa_configured": caa_configured,
+            "caa_warnings": len(caa_warnings),
+            "caa_infos": len(caa_infos),
+        },
+        "unique_names": sorted(all_names),
+        "caa_check": {
+            "issue_tags": caa_issue,
+            "issuewild_tags": caa_issuewild,
+            "warnings": caa_warnings,
+            "infos": caa_infos,
+            "historical_mismatches": caa_historical if include_expired else [],
+        },
+        "certificates": certificates,
+        "fetch_metadata": fetch_metadata,
         "errors": errors,
     }
 

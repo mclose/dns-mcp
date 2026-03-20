@@ -40,6 +40,7 @@ from server import (
     check_dbl,
     cymru_asn,
     check_fast_flux,
+    check_ct_logs,
     detect_hijacking,
     session_stats,
     reset_stats,
@@ -2082,3 +2083,114 @@ class TestCheckFastFlux:
             "google.com", nameserver="9.9.9.9", query_count=3, delay_seconds=6.0
         )
         assert "error" in result
+
+
+class TestCheckCtLogs:
+    """Tests for check_ct_logs tool."""
+
+    def test_bad_domain(self):
+        result = check_ct_logs("", False)
+        assert "error" in result
+
+    def test_response_structure(self):
+        result = check_ct_logs("deflationhollow.net", False)
+        assert "domain" in result
+        assert "query" in result
+        assert "crtsh_url" in result
+        assert "summary" in result
+        assert "unique_names" in result
+        assert "caa_check" in result
+        assert "certificates" in result
+        assert "fetch_metadata" in result
+        assert "errors" in result
+
+    def test_summary_structure(self):
+        result = check_ct_logs("deflationhollow.net", False)
+        s = result["summary"]
+        assert "total_certs" in s
+        assert "active_certs" in s
+        assert "expired_certs" in s
+        assert "wildcard_certs" in s
+        assert "unique_names" in s
+        assert "unique_issuers" in s
+        assert "caa_configured" in s
+        assert "caa_warnings" in s
+        assert "caa_infos" in s
+
+    def test_caa_check_structure(self):
+        result = check_ct_logs("deflationhollow.net", False)
+        cc = result["caa_check"]
+        assert "issue_tags" in cc
+        assert "issuewild_tags" in cc
+        assert "warnings" in cc
+        assert "infos" in cc
+        assert "historical_mismatches" in cc
+
+    def test_fetch_metadata_structure(self):
+        result = check_ct_logs("deflationhollow.net", False)
+        fm = result["fetch_metadata"]
+        assert "attempts" in fm
+        assert "success_on_attempt" in fm
+        assert "response_truncated" in fm
+        assert "error" in fm
+
+    def test_unique_names_sorted(self):
+        result = check_ct_logs("deflationhollow.net", False)
+        names = result["unique_names"]
+        assert isinstance(names, list)
+        assert names == sorted(names)
+
+    def test_certificates_list(self):
+        result = check_ct_logs("deflationhollow.net", False)
+        certs = result["certificates"]
+        assert isinstance(certs, list)
+
+    def test_cert_entry_structure(self):
+        result = check_ct_logs("deflationhollow.net", False)
+        certs = result["certificates"]
+        if certs:
+            c = certs[0]
+            assert "id" in c
+            assert "permalink" in c
+            assert "common_name" in c
+            assert "sans" in c
+            assert "is_wildcard" in c
+            assert "issuer_cn" in c
+            assert "issuer_org" in c
+            assert "caa_identity" in c
+            assert "caa_identity_unknown" in c
+            assert "not_before" in c
+            assert "not_after" in c
+            assert "active" in c
+
+    def test_include_expired_false_default(self):
+        result = check_ct_logs("deflationhollow.net", False)
+        certs = result["certificates"]
+        for cert in certs:
+            assert cert["active"] is True
+
+    def test_historical_mismatches_hidden(self):
+        result = check_ct_logs("deflationhollow.net", False)
+        assert result["caa_check"]["historical_mismatches"] == []
+
+    def test_known_domain_caa(self):
+        result = check_ct_logs("deflationhollow.net", False)
+        s = result["summary"]
+        if s["total_certs"] > 0:
+            assert s["caa_configured"] is True
+            assert s["caa_warnings"] == 0
+            assert s["caa_infos"] == 0
+
+    def test_no_caa_domain(self):
+        # example.com has no CAA records
+        result = check_ct_logs("example.com", False)
+        assert "summary" in result
+        assert result["summary"]["caa_configured"] is False
+        assert result["summary"]["caa_warnings"] == 0
+
+    def test_caa_severity_tiers(self):
+        result = check_ct_logs("deflationhollow.net", False)
+        cc = result["caa_check"]
+        assert isinstance(cc["warnings"], list)
+        assert isinstance(cc["infos"], list)
+        assert isinstance(cc["historical_mismatches"], list)
