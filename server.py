@@ -49,6 +49,7 @@ import dns.message
 import dns.flags
 import dns.rcode
 import dns.opcode
+import dns.rdata
 import dns.rdataclass
 import dns.rdatatype
 import dns.reversename
@@ -68,6 +69,37 @@ import requests
 from pydantic import Field
 import tracking
 from tracking import track, reset_stats as _reset_stats
+
+# IANA root trust anchors — both active KSKs
+# Source: https://www.iana.org/dnssec/files
+_ROOT_TRUST_ANCHOR_TEXT = [
+    # KSK-2017 (tag 20326, alg 8/RSA-SHA256)
+    "257 3 8 AwEAAaz/tAm8yTn4Mfeh5eyI96WSVexTBAvkMgJzkKTOiW1vkIbzxeF3"
+    "+/4RgWOq7HrxRixHlFlExOLAJr5emLvN7SWXgnLh4+B5xQlNVz8Og8kv"
+    "ArMtNROxVQuCaSnIDdD5LKyWbRd2n9WGe2R8PzgCmr3EgVLrjyBxWezF0"
+    "jLHwVN8efS3rCj/EWgvIWgb9tarpVUDK/b58Da+sqqls3eNbuv7pr+eoZ"
+    "G+SrDK6nWeL3c6H5Apxz7LjVc1uTIdsIXxuOLYA4/ilBmSVIzuDWfdRU"
+    "fhHdY6+cn8HFRm+2hM8AnXGXws9555KrUB5qihylGa8subX2Nn6UwNR1A"
+    "kUTV74bU=",
+    # KSK-2024 (tag 38696, alg 8/RSA-SHA256)
+    "257 3 8 AwEAAa96jeuknZlaeSrvyAJj6ZHv28hhOKkx3rLGXVaC6rXTsDc449/c"
+    "idltpkyGwCJNnOAlFNKF2jBosZBU5eeHspaQWOmOElZsjICMQMC3aeHbGi"
+    "ShvZsx4wMYSjH8e7Vrhbu6irwCzVBApESjbUdpWWmEnhathWu1jo+siFUi"
+    "RAAxm9qyJNg/wOZqqzL/dL/q8PkcRU5oUKEpUge71M3ej2/7CPqpdVwuM"
+    "oTvoB+ZOT4YeGyxMvHmbrxlFzGOHOijtzN+u1TQNatX2XBuzZNQ1K+s2C"
+    "XkPIZo7s6JgZyvaBevYtxPvYLw4z9mR7K2vaF18UYH9Z9GNUUeayffKC7"
+    "3PYc=",
+]
+
+
+def _build_root_trust_anchor() -> tuple[dns.rrset.RRset, dict]:
+    """Build root trust anchor RRset from hardcoded IANA key material."""
+    rrset = dns.rrset.RRset(dns.name.root, dns.rdataclass.IN, dns.rdatatype.DNSKEY)
+    for ktext in _ROOT_TRUST_ANCHOR_TEXT:
+        rd = dns.rdata.from_text(dns.rdataclass.IN, dns.rdatatype.DNSKEY, ktext)
+        rrset.add(rd)
+    return rrset, {dns.name.root: rrset}
+
 
 # Initialize FastMCP server
 mcp = FastMCP("DNS Query Server")
@@ -1226,9 +1258,12 @@ def dns_dnssec_validate(
         root_step = {"zone": ".", "level": 0, "validations": []}
 
         try:
-            # Query root DNSKEY
+            # Query root DNSKEY — use TCP because the root DNSKEY RRset is large
+            # and UDP responses are typically truncated (TC=1).
             root_query = dns.message.make_query(".", "DNSKEY", want_dnssec=True)
             root_response = dns.query.udp(root_query, nameserver, timeout=5.0)
+            if root_response.flags & 0x0200:  # TC bit — retry over TCP
+                root_response = dns.query.tcp(root_query, nameserver, timeout=5.0)
 
             root_dnskeys = None
             root_rrsig = None
@@ -1242,22 +1277,32 @@ def dns_dnssec_validate(
                 root_step["dnskey_count"] = len(root_dnskeys)
                 root_step["key_ids"] = [dns.dnssec.key_id(k) for k in root_dnskeys]
 
-                # Root is trusted by the well-known KSK (key id 20326)
-                has_trust_anchor = any(
-                    dns.dnssec.key_id(k) == 20326 for k in root_dnskeys
-                )
-                root_step["has_trust_anchor"] = has_trust_anchor
-                root_step["trust_anchor_key_id"] = 20326
+                # Cryptographically verify root DNSKEY RRSIG against hardcoded
+                # IANA trust anchors (KSK-2017 tag=20326, KSK-2024 tag=38696).
+                anchor_rrset, anchor_keys = _build_root_trust_anchor()
+                anchor_tags = [dns.dnssec.key_id(k) for k in anchor_rrset]
+                root_step["trust_anchor_key_ids"] = anchor_tags
 
-                if has_trust_anchor and root_rrsig:
-                    root_step["validations"].append(
-                        {
-                            "action": "verify rdataset",
-                            "keyid": 20326,
-                            "result": "success (trust anchor)",
-                        }
-                    )
-                    root_step["status"] = "secure"
+                if root_rrsig:
+                    try:
+                        dns.dnssec.validate(root_dnskeys, root_rrsig, anchor_keys)
+                        matched_tag = root_rrsig[0].key_tag
+                        root_step["validations"].append(
+                            {
+                                "action": "verify rdataset",
+                                "keyid": matched_tag,
+                                "result": "success (cryptographic trust anchor verification)",
+                            }
+                        )
+                        root_step["status"] = "secure"
+                    except dns.dnssec.ValidationFailure as e:
+                        root_step["validations"].append(
+                            {
+                                "action": "verify rdataset",
+                                "result": f"failed: {e}",
+                            }
+                        )
+                        root_step["status"] = "bogus"
                 else:
                     root_step["status"] = "insecure"
             else:
