@@ -144,6 +144,7 @@ Once connected, just ask:
 > *"Check the email security posture of deflationhollow.net"*
 > *"Audit the DNSSEC chain for dnssec.works"*
 > *"Is this email headers trustworthy?"* (paste raw headers)
+> *"Run a NIST SP 800-81r3 security audit on example.com"*
 
 Clients that support MCP prompts can also invoke the structured analyst
 workflows directly — see [Client Support](#client-support) for details.
@@ -320,12 +321,14 @@ make test    # runs pytest inside container
 
 ```
 dns-mcp/
-├── server.py              # FastMCP server (23 tools, stdio transport)
+├── server.py              # FastMCP server (27 tools, 4 prompts, stdio transport)
 ├── Dockerfile             # Single-stage Alpine image
 ├── docker-compose.yml     # Build target
 ├── Makefile               # build/test/shell
 ├── requirements.txt       # Python dependencies
 ├── test-mcp-stdio.sh      # End-to-end stdio test
+├── prompts/               # Analyst prompt text files (MCP prompts)
+├── tools/                 # CLI shell tool wrappers
 └── tests/
     └── test_tools.py      # pytest unit tests
 ```
