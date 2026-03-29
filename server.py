@@ -38,6 +38,8 @@ Tools provided:
   - cymru_asn: ASN lookup via Team Cymru DNS service (BGP prefix, org name, high-risk ASN flag)
   - check_fast_flux: Fast-flux detection — repeated A/AAAA queries to detect rotating IPs and short TTLs
   - check_ct_logs: Certificate Transparency log enumeration via crt.sh — subdomain discovery, per-cert details, CAA cross-reference
+  - check_caa: CAA record analysis with CNAME chain tracing and wildcard delegation detection
+  - check_zone_transfer: AXFR zone transfer attempt against all authoritative NS — open transfer = NIST §3.1 violation
 
 Analyst prompts (4):
   - email_security_audit: Grade A–F email security posture (SPF, DKIM, DMARC, MTA-STS, BIMI)
@@ -4101,6 +4103,734 @@ def check_ct_logs(
         },
         "certificates": certificates,
         "fetch_metadata": fetch_metadata,
+        "errors": errors,
+    }
+
+
+# ---------------------------------------------------------------------------
+# check_caa helpers
+# ---------------------------------------------------------------------------
+
+
+def _parse_caa_record(rdata) -> dict:
+    """Parse a dnspython CAA rdata into a structured dict.
+    For issue/issuewild: extracts ca_domain, hard_block flag, RFC 8657 params.
+    """
+    tag = rdata.tag.decode() if isinstance(rdata.tag, bytes) else rdata.tag
+    value = rdata.value.decode() if isinstance(rdata.value, bytes) else rdata.value
+    value = value.strip()
+    rec: dict = {"flags": rdata.flags, "tag": tag, "value": value}
+    if tag in ("issue", "issuewild"):
+        parts = [p.strip() for p in value.split(";")]
+        ca_domain = parts[0].lower()
+        params: dict[str, str] = {}
+        for part in parts[1:]:
+            if "=" in part:
+                k, _, v = part.partition("=")
+                params[k.strip()] = v.strip()
+        rec["ca_domain"] = ca_domain
+        rec["hard_block"] = ca_domain == ""
+        rec["account_uri"] = params.get("accounturi")
+        rec["validation_methods"] = params.get("validationmethods")
+    return rec
+
+
+def _query_caa_at_name(name: str, ns: str) -> tuple[list[dict], bool, str | None]:
+    """Query CAA records at an exact DNS name (no tree-climbing).
+    Returns (records, ad_flag, error_or_None).
+    Empty records with no error = name exists but no CAA.
+    Sets DO flag so a validating resolver (e.g. Quad9) returns the AD flag.
+    """
+    try:
+        query = dns.message.make_query(name, dns.rdatatype.CAA, want_dnssec=True)
+        response = dns.query.udp(query, ns, timeout=5.0)
+        ad_flag = bool(response.flags & dns.flags.AD)
+        records = []
+        for rrset in response.answer:
+            if rrset.rdtype == dns.rdatatype.CAA:
+                for rdata in rrset:
+                    records.append(_parse_caa_record(rdata))
+        return records, ad_flag, None
+    except dns.exception.Timeout:
+        return [], False, "timeout"
+    except Exception as e:
+        return [], False, str(e)
+
+
+def _caa_tree_climb(domain: str, ns: str) -> tuple[list[dict], str | None, bool]:
+    """Walk up the DNS label tree looking for CAA records (RFC 8659 §3).
+    Returns (records, found_at, ad_flag) or ([], None, False) if no CAA found.
+    Stops one level above the root (won't query ".").
+    ad_flag reflects DNSSEC validation status at the level where CAA was found.
+    """
+    parts = domain.split(".")
+    for i in range(len(parts) - 1):
+        candidate = ".".join(parts[i:])
+        records, ad_flag, _err = _query_caa_at_name(candidate, ns)
+        if records:
+            return records, candidate, ad_flag
+    return [], None, False
+
+
+def _caa_follow_cname(name: str, ns: str, max_hops: int = 10) -> tuple[list[dict], str]:
+    """Follow CNAME chain from name. Returns (hops, canonical_name).
+    Each hop: {from, to, crosses_boundary, from_registrable, to_registrable}.
+    Stops on CNAME loop, max_hops, or no further CNAME.
+    Uses direct UDP queries so the resolver does not automatically follow CNAMEs.
+    """
+    hops: list[dict] = []
+    current = name.rstrip(".")
+    seen: set[str] = {current}
+    for _ in range(max_hops):
+        try:
+            query = dns.message.make_query(current, dns.rdatatype.CNAME)
+            response = dns.query.udp(query, ns, timeout=5.0)
+            cname_target = None
+            for rrset in response.answer:
+                if rrset.rdtype == dns.rdatatype.CNAME:
+                    for rdata in rrset:
+                        cname_target = str(rdata.target).rstrip(".")
+                    break
+            if not cname_target or cname_target in seen:
+                break
+            from_reg = _get_org_domain(current)
+            to_reg = _get_org_domain(cname_target)
+            hops.append(
+                {
+                    "from": current,
+                    "to": cname_target,
+                    "crosses_boundary": from_reg != to_reg,
+                    "from_registrable": from_reg,
+                    "to_registrable": to_reg,
+                }
+            )
+            seen.add(cname_target)
+            current = cname_target
+        except Exception:
+            break
+    return hops, current
+
+
+def _is_nxdomain(name: str, ns: str) -> bool:
+    """Return True if name resolves to NXDOMAIN."""
+    try:
+        q = dns.message.make_query(name, dns.rdatatype.A)
+        r = dns.query.udp(q, ns, timeout=5.0)
+        return r.rcode() == dns.rcode.NXDOMAIN
+    except Exception:
+        return False
+
+
+# ---------------------------------------------------------------------------
+# check_caa tool
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+@track("check_caa")
+def check_caa(
+    domain: str = Field(description="Domain to check CAA records for"),
+    nameserver: str | None = Field(
+        default=None,
+        description=f"Nameserver IP (default: {DEFAULT_RESOLVER})",
+    ),
+) -> dict:
+    """
+    CAA record analysis with CNAME chain tracing and wildcard delegation detection.
+
+    Exposes policy gaps that a simple CAA lookup misses:
+
+    - Direct CAA at the queried name, with tree-climbing to find the effective
+      policy a CA would apply when no records are present at the name itself.
+    - CNAME chain tracing: if the domain is a CNAME alias, follows the full
+      chain and reports the effective CAA from the canonical name. Flags when
+      any hop crosses a registrable domain boundary (third-party CAA control).
+    - Wildcard CNAME detection: a *.{domain} CNAME silently delegates CAA
+      authority for all unmatched subdomains to the CNAME target's domain,
+      bypassing the apex CAA entirely (RFC 8659 §3). Confirmed via a random
+      subdomain probe. Common with ngrok, Cloudflare Pages, and similar
+      platforms where a single wildcard delegates all subdomains.
+    - Policy summary: issue/issuewild consistency, hard blocks (issue ";"),
+      iodef reporting contact, RFC 8657 accounturi/validationmethods extensions.
+    - Risk flags at HIGH/MEDIUM/LOW/INFO severity.
+    """
+    valid, result = validate_domain(domain)
+    if not valid:
+        return {"error": result, "domain": domain}
+
+    if nameserver is not None:
+        try:
+            ipaddress.ip_address(nameserver)
+        except ValueError:
+            return {"error": f"Invalid nameserver IP: {nameserver}", "domain": domain}
+    ns = nameserver if nameserver is not None else DEFAULT_RESOLVER
+
+    errors: list[str] = []
+    risk_flags: list[dict] = []
+
+    # 1. Direct CAA lookup with tree-climbing --------------------------------
+    caa_records, found_at, caa_ad_flag = _caa_tree_climb(domain, ns)
+    caa_found = bool(caa_records)
+    tree_climbed = caa_found and found_at != domain
+
+    # 2. CNAME chain for the queried domain itself ----------------------------
+    cname_hops, canonical_name = _caa_follow_cname(domain, ns)
+    cname_present = bool(cname_hops)
+    cname_crosses_boundary = any(h["crosses_boundary"] for h in cname_hops)
+
+    # Effective CAA after CNAME resolution (what the CA actually sees)
+    if cname_present:
+        eff_caa_records, eff_caa_at, eff_caa_ad_flag = _caa_tree_climb(
+            canonical_name, ns
+        )
+    else:
+        eff_caa_records, eff_caa_at, eff_caa_ad_flag = (
+            caa_records,
+            found_at,
+            caa_ad_flag,
+        )
+
+    # 3. Wildcard CNAME detection --------------------------------------------
+    # Primary: query *.{domain} for CNAME directly (literal wildcard label)
+    wc_name = "*." + domain
+    wc_hops, wc_canonical = _caa_follow_cname(wc_name, ns)
+    wc_cname_present = bool(wc_hops)
+    wc_crosses_boundary = any(h["crosses_boundary"] for h in wc_hops)
+    wc_target = wc_hops[0]["to"] if wc_hops else None
+
+    # Confirmation probe: random subdomain — confirms wildcard is active
+    wc_probe_confirmed = False
+    wc_probe_target = None
+    try:
+        probe_label = secrets.token_hex(8)
+        probe_name = f"{probe_label}.{domain}"
+        probe_q = dns.message.make_query(probe_name, dns.rdatatype.A)
+        probe_resp = dns.query.udp(probe_q, ns, timeout=5.0)
+        for rrset in probe_resp.answer:
+            if rrset.rdtype == dns.rdatatype.CNAME:
+                wc_probe_confirmed = True
+                wc_probe_target = str(list(rrset)[0].target).rstrip(".")
+                break
+    except Exception:
+        pass
+
+    # If direct query missed it but probe caught it, mark present
+    if wc_probe_confirmed and not wc_cname_present:
+        wc_cname_present = True
+        if wc_probe_target:
+            probe_reg = _get_org_domain(wc_probe_target)
+            domain_reg = _get_org_domain(domain)
+            wc_crosses_boundary = probe_reg != domain_reg
+            wc_target = wc_probe_target
+
+    # Effective CAA for wildcard-matched subdomains
+    wc_eff_caa_records: list[dict] = []
+    wc_eff_caa_at: str | None = None
+    wc_eff_caa_ad_flag = False
+    if wc_cname_present and wc_canonical != wc_name.rstrip("."):
+        wc_eff_caa_records, wc_eff_caa_at, wc_eff_caa_ad_flag = _caa_tree_climb(
+            wc_canonical, ns
+        )
+
+    # 4. Policy summary ------------------------------------------------------
+    issuers: list[str] = []
+    wildcard_issuers: list[str] = []
+    iodef: str | None = None
+    has_hard_block = False
+    has_wildcard_hard_block = False
+    has_account_uri = False
+    has_validation_methods = False
+
+    for rec in caa_records:
+        if rec["tag"] == "issue":
+            issuers.append(rec.get("ca_domain", rec["value"]))
+            if rec.get("hard_block"):
+                has_hard_block = True
+            if rec.get("account_uri"):
+                has_account_uri = True
+            if rec.get("validation_methods"):
+                has_validation_methods = True
+        elif rec["tag"] == "issuewild":
+            wildcard_issuers.append(rec.get("ca_domain", rec["value"]))
+            if rec.get("hard_block"):
+                has_wildcard_hard_block = True
+            if rec.get("account_uri"):
+                has_account_uri = True
+            if rec.get("validation_methods"):
+                has_validation_methods = True
+        elif rec["tag"] == "iodef":
+            iodef = rec["value"]
+
+    # 5. Risk flags ----------------------------------------------------------
+    if not caa_found and not cname_present:
+        risk_flags.append(
+            {
+                "severity": "HIGH",
+                "code": "NO_CAA",
+                "description": (
+                    "No CAA records found in the DNS tree. "
+                    "Any CA is authorized to issue certificates for this domain."
+                ),
+            }
+        )
+
+    if cname_present and cname_crosses_boundary:
+        cross = next(h for h in cname_hops if h["crosses_boundary"])
+        risk_flags.append(
+            {
+                "severity": "HIGH",
+                "code": "CNAME_THIRD_PARTY_CAA",
+                "description": (
+                    f"{domain} CNAME chain crosses to {cross['to_registrable']}. "
+                    f"The effective CAA policy is determined by {cross['to_registrable']}'s "
+                    f"DNS tree, not by your zone."
+                ),
+            }
+        )
+
+    if wc_cname_present and wc_crosses_boundary:
+        wc_third_party = _get_org_domain(wc_target) if wc_target else "unknown"
+        apex_policy = ", ".join(f'"{i}"' for i in issuers) if issuers else "none"
+        # Note about coincidental match is computed after policy summary — use
+        # wc_policy_matches_apex if already set, otherwise check inline.
+        # (risk_flags is built before derived fields, so compute inline here)
+        _wc_eff_i = sorted(
+            r.get("ca_domain", r["value"])
+            for r in wc_eff_caa_records
+            if r["tag"] == "issue"
+        )
+        _wc_eff_wi = sorted(
+            r.get("ca_domain", r["value"])
+            for r in wc_eff_caa_records
+            if r["tag"] == "issuewild"
+        )
+        _match = _wc_eff_i == sorted(issuers) and _wc_eff_wi == sorted(wildcard_issuers)
+        match_note = (
+            " The third party's current policy coincidentally matches your apex CAA, "
+            "but they retain full control and can change it at any time without notice."
+            if _match
+            else ""
+        )
+        risk_flags.append(
+            {
+                "severity": "HIGH",
+                "code": "WILDCARD_CNAME_THIRD_PARTY",
+                "description": (
+                    f"*.{domain} CNAME delegates to {wc_third_party}. "
+                    f"A CA checking CAA for any unmatched subdomain follows this CNAME "
+                    f"and uses {wc_third_party}'s CAA policy — not your apex CAA "
+                    f"(issue: {apex_policy}). "
+                    f"The wildcard space is effectively controlled by {wc_third_party}."
+                    f"{match_note}"
+                ),
+            }
+        )
+    elif wc_cname_present and not wc_crosses_boundary:
+        risk_flags.append(
+            {
+                "severity": "MEDIUM",
+                "code": "WILDCARD_CNAME_INTERNAL",
+                "description": (
+                    f"*.{domain} has a wildcard CNAME within the same registrable domain. "
+                    f"Effective CAA for unmatched subdomains is determined by the "
+                    f"CNAME target's DNS tree, not the apex CAA directly."
+                ),
+            }
+        )
+
+    if caa_found and not caa_ad_flag:
+        risk_flags.append(
+            {
+                "severity": "MEDIUM",
+                "code": "CAA_NOT_DNSSEC_PROTECTED",
+                "description": (
+                    "CAA records are present but the response was not DNSSEC-validated "
+                    "(AD flag not set). Without DNSSEC, a network-level attacker can "
+                    "spoof the CAA response and substitute a CA of their choosing. "
+                    "Add DNSSEC to make CAA cryptographically enforceable."
+                ),
+            }
+        )
+
+    if cname_present and _is_nxdomain(canonical_name, ns):
+        risk_flags.append(
+            {
+                "severity": "HIGH",
+                "code": "DANGLING_CNAME_TARGET",
+                "description": (
+                    f"{domain} CNAME chain terminates at {canonical_name} which is NXDOMAIN. "
+                    f"If that domain is unregistered, anyone who registers it controls "
+                    f"the effective CAA policy and can authorize cert issuance for {domain}."
+                ),
+            }
+        )
+
+    if wc_cname_present and _is_nxdomain(wc_canonical, ns):
+        risk_flags.append(
+            {
+                "severity": "HIGH",
+                "code": "DANGLING_WILDCARD_CNAME_TARGET",
+                "description": (
+                    f"*.{domain} wildcard CNAME chain terminates at {wc_canonical} which is NXDOMAIN. "
+                    f"If that domain is unregistered, anyone who registers it controls "
+                    f"the effective CAA policy for the entire wildcard space of {domain}."
+                ),
+            }
+        )
+
+    if caa_found and not iodef:
+        risk_flags.append(
+            {
+                "severity": "LOW",
+                "code": "IODEF_MISSING",
+                "description": (
+                    "No iodef tag. There is no reporting endpoint for unauthorized "
+                    "certificate issuance attempts."
+                ),
+            }
+        )
+
+    if caa_found and issuers and not wildcard_issuers:
+        risk_flags.append(
+            {
+                "severity": "LOW",
+                "code": "ISSUEWILD_MISSING",
+                "description": (
+                    "issue tags present but no issuewild tags. "
+                    "Per RFC 8659, wildcard cert issuance falls back to the issue policy. "
+                    "Add explicit issuewild tags to make wildcard certificate policy unambiguous."
+                ),
+            }
+        )
+
+    if caa_found and issuers and not has_account_uri and not has_validation_methods:
+        risk_flags.append(
+            {
+                "severity": "INFO",
+                "code": "NO_RFC8657_BINDING",
+                "description": (
+                    "No RFC 8657 accounturi or validationmethods parameters. "
+                    "Certificate issuance is not bound to a specific CA account or "
+                    "validation method — any account at the authorized CA may issue."
+                ),
+            }
+        )
+
+    if caa_found and len(issuers) > 1:
+        risk_flags.append(
+            {
+                "severity": "INFO",
+                "code": "MULTIPLE_ISSUERS",
+                "description": (
+                    f"{len(issuers)} CAs authorized via issue tags "
+                    f"({', '.join(sorted(issuers))}). "
+                    "Each additional CA is an additional trust point — a compromise or "
+                    "misissuance event at any one of them affects this domain. "
+                    "Reduce to the minimum set of CAs actually in use."
+                ),
+            }
+        )
+
+    # 6. Derived fields ------------------------------------------------------
+
+    # overall_risk: highest severity flag present, or "none" if clean
+    _sev_rank = {"HIGH": 3, "MEDIUM": 2, "LOW": 1, "INFO": 0}
+    if risk_flags:
+        overall_risk = max(risk_flags, key=lambda f: _sev_rank.get(f["severity"], 0))[
+            "severity"
+        ].lower()
+    else:
+        overall_risk = "none"
+
+    # wildcard CNAME: third-party control flag + coincidental policy match
+    wc_third_party_controls = wc_cname_present and wc_crosses_boundary
+    wc_policy_matches_apex: bool | None = None
+    if wc_third_party_controls:
+        wc_eff_issuers = sorted(
+            r.get("ca_domain", r["value"])
+            for r in wc_eff_caa_records
+            if r["tag"] == "issue"
+        )
+        wc_eff_wc_issuers = sorted(
+            r.get("ca_domain", r["value"])
+            for r in wc_eff_caa_records
+            if r["tag"] == "issuewild"
+        )
+        wc_policy_matches_apex = wc_eff_issuers == sorted(
+            issuers
+        ) and wc_eff_wc_issuers == sorted(wildcard_issuers)
+
+    return {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "domain": domain,
+        "nameserver": ns,
+        "overall_risk": overall_risk,
+        "caa": {
+            "found": caa_found,
+            "records": caa_records,
+            "found_at": found_at,
+            "tree_climbed": tree_climbed,
+            "dnssec_validated": caa_ad_flag,
+        },
+        "policy": {
+            "issuers": issuers,
+            "wildcard_issuers": wildcard_issuers,
+            "wildcard_policy_explicit": bool(wildcard_issuers),
+            "iodef": iodef,
+            "hard_block": has_hard_block,
+            "wildcard_hard_block": has_wildcard_hard_block,
+            "rfc8657_account_uri_present": has_account_uri,
+            "rfc8657_validation_methods_present": has_validation_methods,
+        },
+        "cname": {
+            "present": cname_present,
+            "chain": cname_hops,
+            "canonical_name": canonical_name,
+            "crosses_boundary": cname_crosses_boundary,
+            "effective_caa": {
+                "records": eff_caa_records,
+                "found_at": eff_caa_at,
+                "dnssec_validated": eff_caa_ad_flag,
+            }
+            if cname_present
+            else None,
+        },
+        "wildcard_cname": {
+            "present": wc_cname_present,
+            "target": wc_target,
+            "chain": wc_hops,
+            "crosses_boundary": wc_crosses_boundary,
+            "third_party_domain": _get_org_domain(wc_target)
+            if wc_cname_present and wc_crosses_boundary and wc_target
+            else None,
+            "wildcard_confirmed_active": wc_probe_confirmed,
+            "probe_cname_target": wc_probe_target,
+            "third_party_controls_policy": wc_third_party_controls,
+            "policy_matches_apex": wc_policy_matches_apex,
+            "effective_caa": {
+                "records": wc_eff_caa_records,
+                "found_at": wc_eff_caa_at,
+                "policy_authority_domain": _get_org_domain(wc_eff_caa_at)
+                if wc_eff_caa_at
+                else None,
+                "dnssec_validated": wc_eff_caa_ad_flag,
+            },
+        },
+        "risk_flags": risk_flags,
+        "errors": errors,
+    }
+
+
+# ---------------------------------------------------------------------------
+# check_zone_transfer tool
+# ---------------------------------------------------------------------------
+
+_AXFR_NAMES_LIMIT = 200
+
+
+@mcp.tool()
+@track("check_zone_transfer")
+def check_zone_transfer(
+    domain: str = Field(description="Domain to attempt zone transfer for"),
+    nameserver: str | None = Field(
+        default=None,
+        description=f"Nameserver IP for NS lookup (default: {DEFAULT_RESOLVER})",
+    ),
+) -> dict:
+    """
+    Attempt AXFR zone transfer against every authoritative nameserver for a domain.
+
+    Open zone transfers are a NIST SP 800-81r3 §3.1 violation: any host can
+    enumerate the entire zone, exposing all hostnames, mail servers, internal
+    structure, and DNSSEC key material to reconnaissance. Transfers should be
+    restricted to authorised secondaries.
+
+    For each NS:
+    - Resolves the NS hostname to an IP
+    - Attempts AXFR (RFC 5936) directly against that IP
+    - Records allowed / refused / error per NS
+
+    When any transfer succeeds, returns the full zone contents: all names,
+    record type summary, and total record count — showing exactly what an
+    attacker would obtain. Names are capped at 200; set names_truncated=true
+    if the zone is larger.
+    """
+    valid, result = validate_domain(domain)
+    if not valid:
+        return {"error": result, "domain": domain}
+
+    if nameserver is not None:
+        try:
+            ipaddress.ip_address(nameserver)
+        except ValueError:
+            return {"error": f"Invalid nameserver IP: {nameserver}", "domain": domain}
+    ns = nameserver if nameserver is not None else DEFAULT_RESOLVER
+
+    errors: list[str] = []
+    risk_flags: list[dict] = []
+
+    # 1. Resolve NS records --------------------------------------------------
+    try:
+        resolver = dns.resolver.Resolver()
+        resolver.nameservers = [ns]
+        resolver.lifetime = 5.0
+        ns_rrset = resolver.resolve(domain, "NS")
+        ns_names = sorted(str(rdata.target).rstrip(".") for rdata in ns_rrset)
+    except dns.resolver.NXDOMAIN:
+        return {"error": f"NXDOMAIN: {domain} does not exist", "domain": domain}
+    except dns.resolver.NoAnswer:
+        return {"error": f"No NS records found for {domain}", "domain": domain}
+    except dns.exception.Timeout:
+        return {"error": f"NS lookup timed out for {domain}", "domain": domain}
+    except Exception as e:
+        return {"error": str(e), "domain": domain}
+
+    # 2. Attempt AXFR against each NS ----------------------------------------
+    ns_results: list[dict] = []
+    zone_data: dict | None = None
+
+    for ns_name in ns_names:
+        ns_ip: str | None = None
+        ns_ip_err: str | None = None
+        try:
+            ns_ip = str(resolver.resolve(ns_name, "A")[0])
+        except Exception:
+            try:
+                ns_ip = str(resolver.resolve(ns_name, "AAAA")[0])
+            except Exception as e:
+                ns_ip_err = str(e)
+
+        if ns_ip is None:
+            ns_results.append(
+                {
+                    "ns_name": ns_name,
+                    "ns_ip": None,
+                    "allowed": False,
+                    "record_count": None,
+                    "names_count": None,
+                    "record_type_summary": None,
+                    "error": f"Could not resolve NS IP: {ns_ip_err}",
+                }
+            )
+            continue
+
+        try:
+            xfr = dns.query.xfr(ns_ip, domain, timeout=10.0)
+            zone = dns.zone.from_xfr(xfr)
+
+            # Summarise zone contents
+            type_summary: dict[str, int] = {}
+            total_records = 0
+            for _name, node in zone.nodes.items():
+                for rdataset in node.rdatasets:
+                    rdtype_name = dns.rdatatype.to_text(rdataset.rdtype)
+                    count = len(rdataset)
+                    type_summary[rdtype_name] = type_summary.get(rdtype_name, 0) + count
+                    total_records += count
+
+            all_names = sorted(str(n) for n in zone.nodes.keys())
+            truncated = len(all_names) > _AXFR_NAMES_LIMIT
+
+            ns_results.append(
+                {
+                    "ns_name": ns_name,
+                    "ns_ip": ns_ip,
+                    "allowed": True,
+                    "record_count": total_records,
+                    "names_count": len(all_names),
+                    "record_type_summary": type_summary,
+                    "error": None,
+                }
+            )
+
+            # Capture zone data from the first successful transfer
+            if zone_data is None:
+                soa_serial: int | None = None
+                try:
+                    soa_rdset = zone.find_rdataset("@", dns.rdatatype.SOA)
+                    soa_serial = soa_rdset[0].serial
+                except Exception:
+                    pass
+                zone_data = {
+                    "source_ns": ns_name,
+                    "soa_serial": soa_serial,
+                    "names": all_names[:_AXFR_NAMES_LIMIT],
+                    "names_truncated": truncated,
+                    "record_type_summary": type_summary,
+                    "total_records": total_records,
+                }
+
+        except Exception as e:
+            err_str = str(e)
+            # Normalise common refusal messages
+            if (
+                "REFUSED" in err_str
+                or "FormError" in err_str
+                or "not for zone" in err_str
+            ):
+                err_str = "REFUSED"
+            ns_results.append(
+                {
+                    "ns_name": ns_name,
+                    "ns_ip": ns_ip,
+                    "allowed": False,
+                    "record_count": None,
+                    "names_count": None,
+                    "record_type_summary": None,
+                    "error": err_str,
+                }
+            )
+
+    # 3. Risk flags ----------------------------------------------------------
+    allowed_ns = [r for r in ns_results if r["allowed"]]
+    refused_ns = [r for r in ns_results if not r["allowed"] and r["error"] == "REFUSED"]
+    zone_transfer_allowed = bool(allowed_ns)
+
+    if allowed_ns:
+        open_list = ", ".join(r["ns_name"] for r in allowed_ns)
+        risk_flags.append(
+            {
+                "severity": "HIGH",
+                "code": "AXFR_OPEN",
+                "description": (
+                    f"Zone transfer allowed from {open_list}. "
+                    f"Any host can enumerate the full zone — all hostnames, mail servers, "
+                    f"and internal structure are exposed. "
+                    f"NIST SP 800-81r3 §3.1: restrict AXFR to authorised secondaries only."
+                ),
+            }
+        )
+
+    if allowed_ns and refused_ns:
+        risk_flags.append(
+            {
+                "severity": "MEDIUM",
+                "code": "AXFR_INCONSISTENT",
+                "description": (
+                    f"Nameservers are inconsistent: {len(allowed_ns)} allow AXFR, "
+                    f"{len(refused_ns)} refuse. All authoritative NS should enforce "
+                    f"the same transfer policy."
+                ),
+            }
+        )
+
+    overall_risk = (
+        "high"
+        if any(f["severity"] == "HIGH" for f in risk_flags)
+        else "medium"
+        if any(f["severity"] == "MEDIUM" for f in risk_flags)
+        else "none"
+    )
+
+    return {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "domain": domain,
+        "nameserver": ns,
+        "overall_risk": overall_risk,
+        "zone_transfer_allowed": zone_transfer_allowed,
+        "ns_results": ns_results,
+        "zone_data": zone_data,
+        "risk_flags": risk_flags,
         "errors": errors,
     }
 

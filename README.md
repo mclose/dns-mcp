@@ -44,6 +44,8 @@ through any MCP-compatible assistant in real time.
 | `cymru_asn` | ASN lookup via Team Cymru DNS service — BGP prefix, org name, country, and high-risk ASN flag |
 | `check_fast_flux` | Fast-flux detection — repeated A/AAAA queries to identify rotating IPs and suspiciously short TTLs; signals botnet/phishing infrastructure |
 | `check_ct_logs` | Certificate Transparency log enumeration via crt.sh — unique subdomain names, per-cert issuer/validity details, wildcard detection, and CAA cross-reference with correct O= field mapping |
+| `check_caa` | CAA record analysis with CNAME chain tracing and wildcard delegation detection — tree-climbs for effective policy, follows CNAME chains, detects wildcard CNAMEs that delegate CAA authority to third parties (RFC 8659 §3), surfaces RFC 8657 binding gaps |
+| `check_zone_transfer` | AXFR zone transfer attempt against every authoritative NS — open transfer is a NIST SP 800-81r3 §3.1 violation; returns full zone contents (names, record type summary) when transfer succeeds |
 
 ### Utility
 | Tool | Description |
@@ -277,7 +279,7 @@ docker run --rm -i dns-mcp python server.py
   | stdin/stdout (MCP stdio transport)
   v
 FastMCP server (server.py)
-  |  - All 27 tools
+  |  - All 29 tools
   |  - dnspython for DNS queries
   |  - requests for RDAP only
 ```
@@ -321,7 +323,7 @@ make test    # runs pytest inside container
 
 ```
 dns-mcp/
-├── server.py              # FastMCP server (27 tools, 4 prompts, stdio transport)
+├── server.py              # FastMCP server (29 tools, 4 prompts, stdio transport)
 ├── Dockerfile             # Single-stage Alpine image
 ├── docker-compose.yml     # Build target
 ├── Makefile               # build/test/shell

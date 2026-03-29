@@ -140,7 +140,7 @@ sleep 0.5
 
 # ── Test 2: List tools ───────────────────────────────────────
 
-echo -e "${YELLOW}[2] List Tools (expect 27)${NC}"
+echo -e "${YELLOW}[2] List Tools (expect 29)${NC}"
 LIST_BODY='{"jsonrpc":"2.0","id":2,"method":"tools/list"}'
 echo "$LIST_BODY" | jq .
 echo "$LIST_BODY" >&3
@@ -152,10 +152,10 @@ if read -t 10 -r LIST_RESPONSE <&4; then
     echo -e "  Tools found: ${TOOL_COUNT}"
     echo "$TOOL_NAMES" | while read -r name; do echo "    - $name"; done
 
-    if [ "$TOOL_COUNT" -ge 27 ]; then
+    if [ "$TOOL_COUNT" -ge 29 ]; then
         PASS=$((PASS + 1))
     else
-        echo -e "${RED}  EXPECTED 27 tools, got ${TOOL_COUNT}${NC}"
+        echo -e "${RED}  EXPECTED 29 tools, got ${TOOL_COUNT}${NC}"
         FAIL=$((FAIL + 1))
     fi
 else
@@ -258,6 +258,12 @@ call_tool 30 "check_fast_flux - google.com (stable domain, no flux)" \
 
 call_tool 32 "check_ct_logs - deflationhollow.net" \
     '{"jsonrpc":"2.0","id":32,"method":"tools/call","params":{"name":"check_ct_logs","arguments":{"domain":"deflationhollow.net","include_expired":false}}}'
+
+call_tool 33 "check_caa - lab.deflationhollow.net (wildcard CNAME to ngrok)" \
+    '{"jsonrpc":"2.0","id":33,"method":"tools/call","params":{"name":"check_caa","arguments":{"domain":"lab.deflationhollow.net","nameserver":"9.9.9.9"}}}'
+
+call_tool 34 "check_zone_transfer - zonetransfer.me (purpose-built open AXFR target)" \
+    '{"jsonrpc":"2.0","id":34,"method":"tools/call","params":{"name":"check_zone_transfer","arguments":{"domain":"zonetransfer.me","nameserver":"9.9.9.9"}}}'
 
 # ── Analyst Prompts ───────────────────────────────────────────
 

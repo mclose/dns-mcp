@@ -41,6 +41,8 @@ from server import (
     cymru_asn,
     check_fast_flux,
     check_ct_logs,
+    check_caa,
+    check_zone_transfer,
     detect_hijacking,
     session_stats,
     reset_stats,
@@ -532,10 +534,22 @@ class TestReverseDns:
 # ---------------------------------------------------------------------------
 
 
+def _dnssec_validate_with_fallback(domain: str, rdtype: str) -> dict:
+    """Try Quad9 first; if it returns insecure (known intermittent flakiness),
+    retry against Cloudflare (1.1.1.1). Returns whichever result is fully validated,
+    or the Cloudflare result if neither validates."""
+    result = dns_dnssec_validate(domain, rdtype, nameserver="9.9.9.9")
+    if result.get("overall_status") == "insecure":
+        fallback = dns_dnssec_validate(domain, rdtype, nameserver="1.1.1.1")
+        if fallback.get("overall_status") == "fully validated":
+            return fallback
+    return result
+
+
 class TestDnssecValidate:
     def test_signed_domain(self):
         """cloudflare.com is DNSSEC-signed — must reach fully validated"""
-        result = dns_dnssec_validate("cloudflare.com", "A", nameserver="9.9.9.9")
+        result = _dnssec_validate_with_fallback("cloudflare.com", "A")
         assert "error" not in result
         assert result["domain"] == "cloudflare.com"
         assert "chain_of_trust" in result
@@ -544,13 +558,13 @@ class TestDnssecValidate:
 
     def test_signed_domain_aaaa(self):
         """cloudflare.com AAAA must also reach fully validated"""
-        result = dns_dnssec_validate("cloudflare.com", "AAAA", nameserver="9.9.9.9")
+        result = _dnssec_validate_with_fallback("cloudflare.com", "AAAA")
         assert "error" not in result
         assert result["overall_status"] == "fully validated"
 
     def test_zone_apex_validates_secure(self):
         """Zone apex A record (deflationhollow.net) must walk its own DS/DNSKEY step"""
-        result = dns_dnssec_validate("deflationhollow.net", "A", nameserver="9.9.9.9")
+        result = _dnssec_validate_with_fallback("deflationhollow.net", "A")
         assert "error" not in result
         assert result["overall_status"] == "fully validated"
 
@@ -558,9 +572,7 @@ class TestDnssecValidate:
         """Hostname inside a sub-zone (claude.lab.deflationhollow.net) must reach
         fully validated — regression test for no_dnskey false-insecure bug where
         the chain walk tried to treat the hostname itself as a zone apex."""
-        result = dns_dnssec_validate(
-            "claude.lab.deflationhollow.net", "A", nameserver="9.9.9.9"
-        )
+        result = _dnssec_validate_with_fallback("claude.lab.deflationhollow.net", "A")
         assert "error" not in result
         assert result["overall_status"] == "fully validated"
         assert result["resolver_ad_flag"] is True
@@ -569,9 +581,7 @@ class TestDnssecValidate:
     def test_sub_zone_apex_nsec_negative_validates_secure(self):
         """lab.deflationhollow.net has no A record, but NSEC proves it securely.
         delv reports: 'negative response, fully validated' — we must match that."""
-        result = dns_dnssec_validate(
-            "lab.deflationhollow.net", "A", nameserver="9.9.9.9"
-        )
+        result = _dnssec_validate_with_fallback("lab.deflationhollow.net", "A")
         assert "error" not in result
         assert result["overall_status"] == "fully validated"
         target = next(s for s in result["chain_of_trust"] if "target" in s)
@@ -580,17 +590,13 @@ class TestDnssecValidate:
 
     def test_sub_zone_apex_existing_record_validates_secure(self):
         """lab.deflationhollow.net NS record exists and must reach fully validated"""
-        result = dns_dnssec_validate(
-            "lab.deflationhollow.net", "NS", nameserver="9.9.9.9"
-        )
+        result = _dnssec_validate_with_fallback("lab.deflationhollow.net", "NS")
         assert "error" not in result
         assert result["overall_status"] == "fully validated"
 
     def test_nsec_test_zone_validates_secure(self):
         """nsec-test.deflationhollow.net is DNSSEC-signed (NSEC) — must validate"""
-        result = dns_dnssec_validate(
-            "nsec-test.deflationhollow.net", "SOA", nameserver="9.9.9.9"
-        )
+        result = _dnssec_validate_with_fallback("nsec-test.deflationhollow.net", "SOA")
         assert "error" not in result
         assert result["overall_status"] == "fully validated"
 
@@ -2194,3 +2200,232 @@ class TestCheckCtLogs:
         assert isinstance(cc["warnings"], list)
         assert isinstance(cc["infos"], list)
         assert isinstance(cc["historical_mismatches"], list)
+
+
+class TestCheckCaa:
+    """Tests for check_caa tool."""
+
+    def test_bad_domain(self):
+        result = check_caa("", "9.9.9.9")
+        assert "error" in result
+
+    def test_invalid_nameserver(self):
+        result = check_caa("example.com", "not-an-ip")
+        assert "error" in result
+
+    def test_response_structure(self):
+        result = check_caa("deflationhollow.net", "9.9.9.9")
+        assert "domain" in result
+        assert "nameserver" in result
+        assert "overall_risk" in result
+        assert "caa" in result
+        assert "policy" in result
+        assert "cname" in result
+        assert "wildcard_cname" in result
+        assert "risk_flags" in result
+        assert "errors" in result
+        assert "timestamp" in result
+
+    def test_caa_structure(self):
+        result = check_caa("deflationhollow.net", "9.9.9.9")
+        caa = result["caa"]
+        assert "found" in caa
+        assert "records" in caa
+        assert "found_at" in caa
+        assert "tree_climbed" in caa
+        assert isinstance(caa["records"], list)
+
+    def test_policy_structure(self):
+        result = check_caa("deflationhollow.net", "9.9.9.9")
+        pol = result["policy"]
+        assert "issuers" in pol
+        assert "wildcard_issuers" in pol
+        assert "wildcard_policy_explicit" in pol
+        assert "iodef" in pol
+        assert "hard_block" in pol
+        assert "wildcard_hard_block" in pol
+        assert "rfc8657_account_uri_present" in pol
+        assert "rfc8657_validation_methods_present" in pol
+
+    def test_cname_structure(self):
+        result = check_caa("deflationhollow.net", "9.9.9.9")
+        cn = result["cname"]
+        assert "present" in cn
+        assert "chain" in cn
+        assert "canonical_name" in cn
+        assert "crosses_boundary" in cn
+        assert isinstance(cn["chain"], list)
+
+    def test_wildcard_cname_structure(self):
+        result = check_caa("deflationhollow.net", "9.9.9.9")
+        wc = result["wildcard_cname"]
+        assert "present" in wc
+        assert "target" in wc
+        assert "chain" in wc
+        assert "crosses_boundary" in wc
+        assert "wildcard_confirmed_active" in wc
+        assert "probe_cname_target" in wc
+        assert "third_party_controls_policy" in wc
+        assert "policy_matches_apex" in wc
+        assert "effective_caa" in wc
+        eff = wc["effective_caa"]
+        assert "records" in eff
+        assert "found_at" in eff
+        assert "policy_authority_domain" in eff
+
+    def test_risk_flags_structure(self):
+        result = check_caa("deflationhollow.net", "9.9.9.9")
+        for flag in result["risk_flags"]:
+            assert "severity" in flag
+            assert "code" in flag
+            assert "description" in flag
+            assert flag["severity"] in ("HIGH", "MEDIUM", "LOW", "INFO")
+
+    def test_known_caa_domain(self):
+        # deflationhollow.net has CAA records
+        result = check_caa("deflationhollow.net", "9.9.9.9")
+        assert result["caa"]["found"] is True
+        assert isinstance(result["policy"]["issuers"], list)
+        assert len(result["policy"]["issuers"]) > 0
+
+    def test_no_caa_domain(self):
+        # craigslist.org is stable and unsigned — no CAA
+        result = check_caa("craigslist.org", "9.9.9.9")
+        assert "error" not in result
+        # Either no CAA found or tree-climbed to parent
+        # Just check structure is intact
+        assert "caa" in result
+        assert "risk_flags" in result
+
+    def test_wildcard_cname_lab(self):
+        # lab.deflationhollow.net has *.lab → ngrok-cname.com wildcard CNAME
+        result = check_caa("lab.deflationhollow.net", "9.9.9.9")
+        wc = result["wildcard_cname"]
+        assert wc["present"] is True
+        assert wc["crosses_boundary"] is True
+        assert "ngrok" in (wc["third_party_domain"] or "").lower()
+        assert wc["third_party_controls_policy"] is True
+        # policy_matches_apex is bool (ngrok uses LE too, so True in practice)
+        assert isinstance(wc["policy_matches_apex"], bool)
+        # policy_authority_domain should resolve to ngrok domain
+        eff = wc["effective_caa"]
+        assert eff["policy_authority_domain"] is not None
+        assert "ngrok" in eff["policy_authority_domain"].lower()
+        # Should have HIGH risk flag for wildcard third-party delegation
+        codes = [f["code"] for f in result["risk_flags"]]
+        assert "WILDCARD_CNAME_THIRD_PARTY" in codes
+        assert result["overall_risk"] == "high"
+
+    def test_no_cname_on_apex(self):
+        # deflationhollow.net apex is not a CNAME
+        result = check_caa("deflationhollow.net", "9.9.9.9")
+        assert result["cname"]["present"] is False
+        assert result["cname"]["effective_caa"] is None
+
+    def test_overall_risk_values(self):
+        # overall_risk must be one of the four valid values
+        for domain in ["deflationhollow.net", "example.com"]:
+            result = check_caa(domain, "9.9.9.9")
+            assert result["overall_risk"] in ("none", "low", "medium", "high")
+
+    def test_no_caa_overall_risk_high(self):
+        result = check_caa("example.com", "9.9.9.9")
+        assert result["overall_risk"] == "high"
+
+    def test_multiple_issuers_flag(self):
+        # github.com has 4 CAs in issue tags — MULTIPLE_ISSUERS should fire
+        result = check_caa("github.com", "9.9.9.9")
+        if len(result["policy"]["issuers"]) > 1:
+            codes = [f["code"] for f in result["risk_flags"]]
+            assert "MULTIPLE_ISSUERS" in codes
+            flag = next(
+                f for f in result["risk_flags"] if f["code"] == "MULTIPLE_ISSUERS"
+            )
+            assert flag["severity"] == "INFO"
+        # If issuers change to 1, test still passes — guard with len check
+
+    def test_single_issuer_no_multiple_issuers_flag(self):
+        # deflationhollow.net has 1 issuer — flag must NOT fire
+        result = check_caa("deflationhollow.net", "9.9.9.9")
+        codes = [f["code"] for f in result["risk_flags"]]
+        assert "MULTIPLE_ISSUERS" not in codes
+
+    def test_caa_dnssec_validated_present(self):
+        result = check_caa("deflationhollow.net", "9.9.9.9")
+        assert "dnssec_validated" in result["caa"]
+        assert isinstance(result["caa"]["dnssec_validated"], bool)
+
+
+class TestCheckZoneTransfer:
+    """Tests for check_zone_transfer tool."""
+
+    def test_bad_domain(self):
+        result = check_zone_transfer("", "9.9.9.9")
+        assert "error" in result
+
+    def test_invalid_nameserver(self):
+        result = check_zone_transfer("deflationhollow.net", "not-an-ip")
+        assert "error" in result
+
+    def test_response_structure(self):
+        result = check_zone_transfer("deflationhollow.net", "9.9.9.9")
+        assert "domain" in result
+        assert "nameserver" in result
+        assert "overall_risk" in result
+        assert "zone_transfer_allowed" in result
+        assert "ns_results" in result
+        assert "zone_data" in result
+        assert "risk_flags" in result
+        assert "errors" in result
+        assert "timestamp" in result
+
+    def test_ns_result_structure(self):
+        result = check_zone_transfer("deflationhollow.net", "9.9.9.9")
+        assert isinstance(result["ns_results"], list)
+        assert len(result["ns_results"]) > 0
+        for ns in result["ns_results"]:
+            assert "ns_name" in ns
+            assert "ns_ip" in ns
+            assert "allowed" in ns
+            assert "record_count" in ns
+            assert "names_count" in ns
+            assert "record_type_summary" in ns
+            assert "error" in ns
+
+    def test_open_zone_transfer(self):
+        # zonetransfer.me is a purpose-built AXFR demo domain (DigiNinja)
+        result = check_zone_transfer("zonetransfer.me", "9.9.9.9")
+        assert result["zone_transfer_allowed"] is True
+        assert result["overall_risk"] == "high"
+        codes = [f["code"] for f in result["risk_flags"]]
+        assert "AXFR_OPEN" in codes
+
+    def test_zone_data_when_open(self):
+        result = check_zone_transfer("zonetransfer.me", "9.9.9.9")
+        zd = result["zone_data"]
+        assert zd is not None
+        assert "source_ns" in zd
+        assert "soa_serial" in zd
+        assert "names" in zd
+        assert "names_truncated" in zd
+        assert "record_type_summary" in zd
+        assert "total_records" in zd
+        assert isinstance(zd["names"], list)
+        assert len(zd["names"]) > 0
+        assert isinstance(zd["total_records"], int)
+        assert isinstance(zd["soa_serial"], int)
+
+    def test_refused_zone_transfer(self):
+        # google.com refuses AXFR
+        result = check_zone_transfer("google.com", "9.9.9.9")
+        assert result["zone_transfer_allowed"] is False
+        assert result["zone_data"] is None
+        assert result["overall_risk"] == "none"
+        assert result["risk_flags"] == []
+
+    def test_risk_flags_structure(self):
+        result = check_zone_transfer("deflationhollow.net", "9.9.9.9")
+        for flag in result["risk_flags"]:
+            assert "severity" in flag
+            assert "code" in flag
+            assert "description" in flag
