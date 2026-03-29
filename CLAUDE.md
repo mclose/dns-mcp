@@ -9,7 +9,7 @@ See `README.md` for usage. This file is for working in the codebase.
 
 | File | Purpose |
 |------|---------|
-| `server.py` | All tools, helpers, and prompts — the whole server (~2400 lines) |
+| `server.py` | All tools, helpers, and prompts — the whole server (~5100 lines) |
 | `tests/test_tools.py` | pytest unit tests (call tool functions directly) |
 | `test-mcp-stdio.sh` | End-to-end MCP protocol test over stdin/stdout |
 | `Makefile` | `make build` / `make test` / `make shell` |
@@ -19,8 +19,8 @@ See `README.md` for usage. This file is for working in the codebase.
 
 ```bash
 make build          # rebuild Docker image (required after any code change)
-make test           # pytest in container (177 tests)
-./test-mcp-stdio.sh # end-to-end MCP protocol test (27 tests)
+make test           # pytest in container (276 tests)
+./test-mcp-stdio.sh # end-to-end MCP protocol test (38 tests)
 make shell          # interactive shell inside the container
 ```
 
@@ -100,6 +100,9 @@ Tests call tool functions directly — **not** via the MCP protocol. This means:
 - Use `detect_hijacking("9.9.9.9")["checks"]` → `transparent_proxy.passed` as
   the signal to relax DNSSEC-dependent assertions (intercepting proxies strip
   the AD flag, turning `dane_valid` into `dane_present_no_dnssec`)
+- Quad9 intermittently returns "insecure" for signed zones — use
+  `_dnssec_validate_with_fallback(domain, rdtype)` (defined in test_tools.py)
+  for any assertion that expects `"fully validated"`; it retries against `1.1.1.1`
 - Check structure and types rather than exact record values
 
 ## Coding standards
