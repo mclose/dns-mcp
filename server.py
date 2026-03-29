@@ -38,6 +38,12 @@ Tools provided:
   - cymru_asn: ASN lookup via Team Cymru DNS service (BGP prefix, org name, high-risk ASN flag)
   - check_fast_flux: Fast-flux detection — repeated A/AAAA queries to detect rotating IPs and short TTLs
   - check_ct_logs: Certificate Transparency log enumeration via crt.sh — subdomain discovery, per-cert details, CAA cross-reference
+
+Analyst prompts (4):
+  - email_security_audit: Grade A–F email security posture (SPF, DKIM, DMARC, MTA-STS, BIMI)
+  - dnssec_chain_audit: Full DNSSEC chain-of-trust audit from root to target
+  - soc_email_forensics: Forensic phishing analysis of raw email
+  - nist_800_81r3_audit: Domain security posture audit aligned with NIST SP 800-81r3
 """
 
 from fastmcp import FastMCP
@@ -4120,6 +4126,12 @@ def dnssec_chain_audit() -> str:
 def soc_email_forensics() -> str:
     """Forensic phishing analysis of a raw email (.eml or pasted headers). Returns TRUSTABLE / SUSPICIOUS / PHISHING / FURTHER ANALYSIS REQUIRED."""
     return (_PROMPT_DIR / "soc_email_forensics.txt").read_text()
+
+
+@mcp.prompt()
+def nist_800_81r3_audit() -> str:
+    """Domain security posture audit aligned with NIST SP 800-81r3 (Secure DNS Deployment Guide, March 2026). Covers delegation, DNSSEC, CAA, email auth, reputation, and resolver integrity."""
+    return (_PROMPT_DIR / "nist_800_81r3_audit.txt").read_text()
 
 
 # ---------------------------------------------------------------------------

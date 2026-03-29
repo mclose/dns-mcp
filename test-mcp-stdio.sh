@@ -261,7 +261,7 @@ call_tool 32 "check_ct_logs - deflationhollow.net" \
 
 # ── Analyst Prompts ───────────────────────────────────────────
 
-echo -e "${YELLOW}[31] List Prompts (expect 3)${NC}"
+echo -e "${YELLOW}[31] List Prompts (expect 4)${NC}"
 PROMPTS_LIST_BODY='{"jsonrpc":"2.0","id":31,"method":"prompts/list"}'
 echo "$PROMPTS_LIST_BODY" | jq .
 echo "$PROMPTS_LIST_BODY" >&3
@@ -270,10 +270,10 @@ if read -t 10 -r PROMPTS_LIST_RESPONSE <&4; then
     PROMPT_COUNT=$(echo "$PROMPT_NAMES" | grep -c . || true)
     echo -e "  Prompts found: ${PROMPT_COUNT}"
     echo "$PROMPT_NAMES" | while read -r name; do echo "    - $name"; done
-    if [ "$PROMPT_COUNT" -ge 3 ]; then
+    if [ "$PROMPT_COUNT" -ge 4 ]; then
         PASS=$((PASS + 1))
     else
-        echo -e "${RED}  EXPECTED 3 prompts, got ${PROMPT_COUNT}${NC}"
+        echo -e "${RED}  EXPECTED 4 prompts, got ${PROMPT_COUNT}${NC}"
         FAIL=$((FAIL + 1))
     fi
 else
@@ -295,6 +295,27 @@ if read -t 10 -r PROMPT_GET_RESPONSE <&4; then
     else
         echo -e "${RED}  FAILED - prompt content missing expected text${NC}"
         echo "$PROMPT_GET_RESPONSE" | jq .
+        FAIL=$((FAIL + 1))
+    fi
+else
+    echo -e "${RED}  FAILED - no response (10s timeout)${NC}"
+    FAIL=$((FAIL + 1))
+fi
+echo ""
+
+echo -e "${YELLOW}[32] Get Prompt - nist_800_81r3_audit${NC}"
+PROMPT_NIST_BODY='{"jsonrpc":"2.0","id":32,"method":"prompts/get","params":{"name":"nist_800_81r3_audit"}}'
+echo "$PROMPT_NIST_BODY" | jq .
+echo "$PROMPT_NIST_BODY" >&3
+if read -t 10 -r PROMPT_NIST_RESPONSE <&4; then
+    PROMPT_NIST_TEXT=$(echo "$PROMPT_NIST_RESPONSE" | jq -r '.result.messages[0].content.text // empty' 2>/dev/null)
+    if echo "$PROMPT_NIST_TEXT" | grep -q "NIST SP 800-81r3"; then
+        echo -e "  Content verified (contains 'NIST SP 800-81r3')"
+        echo "$PROMPT_NIST_RESPONSE" | jq '{id: .id, messages_count: (.result.messages | length)}'
+        PASS=$((PASS + 1))
+    else
+        echo -e "${RED}  FAILED - prompt content missing expected text${NC}"
+        echo "$PROMPT_NIST_RESPONSE" | jq .
         FAIL=$((FAIL + 1))
     fi
 else

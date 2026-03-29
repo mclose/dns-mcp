@@ -71,7 +71,7 @@ Resources are pull-based — clients load them on demand, not on every message.
 
 ## Analyst Prompts
 
-The server ships with three analyst prompt templates. Any MCP-compatible client
+The server ships with four analyst prompt templates. Any MCP-compatible client
 can list and invoke them — no Claude-specific configuration required.
 
 | Prompt | What it does |
@@ -79,6 +79,7 @@ can list and invoke them — no Claude-specific configuration required.
 | `email_security_audit` | Domain email security audit: SPF, DKIM, DMARC, MTA-STS, BIMI — graded A through F with prioritized recommendations |
 | `dnssec_chain_audit` | Full DNSSEC chain-of-trust audit from the IANA root trust anchor down to the target domain |
 | `soc_email_forensics` | Forensic phishing analysis of a raw email (.eml or pasted headers) — returns TRUSTABLE / SUSPICIOUS / PHISHING / FURTHER ANALYSIS REQUIRED |
+| `nist_800_81r3_audit` | Domain security posture audit aligned with NIST SP 800-81r3 — covers delegation integrity, DNSSEC, CAA, email authentication, reputation, and resolver integrity |
 
 Prompts set the analyst context and tool-use strategy for the session. The LLM
 runs the appropriate tools in sequence and synthesizes a structured report.
@@ -208,15 +209,16 @@ claude mcp add dns-mcp -- docker run --rm -i --dns 9.9.9.9 dns-mcp python server
 ```
 
 Or add `--scope user` to make it available across all projects. Invoke prompts
-by typing `/` in the chat — the three analyst prompts appear as:
+by typing `/` in the chat — the four analyst prompts appear as:
 
 ```
 /mcp__dns-mcp__email_security_audit
 /mcp__dns-mcp__dnssec_chain_audit
 /mcp__dns-mcp__soc_email_forensics
+/mcp__dns-mcp__nist_800_81r3_audit
 ```
 
-Type `/mcp__dns-mcp__` and tab-complete to see all three.
+Type `/mcp__dns-mcp__` and tab-complete to see all four.
 
 ### Gemini CLI
 
