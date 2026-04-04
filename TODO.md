@@ -68,6 +68,21 @@ Working backlog. Items are roughly priority-ordered within each section.
 
 ## Infrastructure
 
+- [ ] **`dns_dnssec_validate`: add DS→KSK hash verification** — after fetching DS and
+  DNSKEY records at each zone level, call `dns.dnssec.make_ds(zone_name, key, ds.digest_type)`
+  and compare digests byte-for-byte against each DS record. Currently the tool verifies the
+  RRSIG over the DS RRset (signature is valid) but never checks that the DS digest actually
+  matches the KSK. A key-tag collision with a mismatched digest would silently pass. This
+  check is present in ping-lite's `dnssec_walk` but missing here. See `ping-lite/server.py`
+  lines 769–785 for reference implementation.
+
+- [ ] **`dns_dnssec_validate`: filter RRSIG by `covers` type** — when extracting RRSIG
+  records from the answer section, add `rrset.covers == dns.rdatatype.DNSKEY` (or DS, or
+  the target type) checks to avoid picking up the wrong RRSIG when multiple types appear
+  in the same response. ping-lite's walk already does this; dns-mcp takes the first
+  RRSIG it sees. Low-probability in practice (recursive resolvers typically return clean
+  answers) but the right defensive pattern.
+
 - [ ] **`libunbound` Python bindings for `dns_dnssec_validate`** — replace the manual
   DS/DNSKEY chain walk with a call to `libunbound` (production DNSSEC-validating
   resolver, same engine used by real resolvers). Would make the chain verdict
