@@ -21,6 +21,8 @@ AUTO_APPROVE=false
 JSON_MODE=false
 TEXT_MODE=false
 MODEL=claude-sonnet-4-6
+TRANSPORT=stdio
+SHIM_URL="http://127.0.0.1:58676/mcp"
 POSITIONAL=()
 SKIP_NEXT=false
 PREV_ARG=""
@@ -28,15 +30,20 @@ for arg in "$@"; do
   if [ "$SKIP_NEXT" = true ]; then
     SKIP_NEXT=false
     case "$PREV_ARG" in
-      -m|--model) MODEL="$arg" ;;
+      -m|--model)     MODEL="$arg" ;;
+      --transport)    TRANSPORT="$arg" ;;
+      --shim-url)     SHIM_URL="$arg"; TRANSPORT=http ;;
     esac
     continue
   fi
   case "$arg" in
-    -y|--yes)   AUTO_APPROVE=true ;;
-    --json)     JSON_MODE=true ;;
-    --text)     TEXT_MODE=true ;;
-    -m|--model) PREV_ARG="$arg"; SKIP_NEXT=true ;;
+    -y|--yes)        AUTO_APPROVE=true ;;
+    --json)          JSON_MODE=true ;;
+    --text)          TEXT_MODE=true ;;
+    -m|--model)      PREV_ARG="$arg"; SKIP_NEXT=true ;;
+    --transport)     PREV_ARG="$arg"; SKIP_NEXT=true ;;
+    --transport=*)   TRANSPORT="${arg#--transport=}" ;;
+    --shim-url)      PREV_ARG="$arg"; SKIP_NEXT=true ;;
     -h|--help)
       echo "Usage: $(basename "$0") [options] <email.txt|->"
       echo ""
@@ -48,9 +55,11 @@ for arg in "$@"; do
       echo "  --json --text   Two runs → both files, same timestamp (costs 2x — will ask)"
       echo ""
       echo "Options:"
-      echo "  -y, --yes          Auto-approve dns-mcp tool permissions (skip prompt)"
-      echo "  -m, --model MODEL  Claude model (default: claude-sonnet-4-6)"
-      echo "  -h, --help         Show this help"
+      echo "  -y, --yes                Auto-approve dns-mcp tool permissions (skip prompt)"
+      echo "  -m, --model MODEL        Claude model (default: claude-sonnet-4-6)"
+      echo "  --transport stdio|http   MCP transport (default: stdio — spawns docker per run)"
+      echo "  --shim-url URL           Shim URL for http transport (default: http://127.0.0.1:58676/mcp)"
+      echo "  -h, --help               Show this help"
       echo ""
       echo "Input:"
       echo "  email.txt    Raw email file with headers (.eml or .txt)"
@@ -89,8 +98,12 @@ if ! command -v claude >/dev/null 2>&1; then
   echo "ERROR: claude CLI not found in PATH" >&2
   exit 1
 fi
-if ! docker image inspect dns-mcp >/dev/null 2>&1; then
+if [ "$TRANSPORT" = "stdio" ] && ! docker image inspect dns-mcp >/dev/null 2>&1; then
   echo "ERROR: dns-mcp image not found. Run: make build" >&2
+  exit 1
+fi
+if [ "$TRANSPORT" = "http" ] && ! curl -sf "${SHIM_URL%/mcp}/health" >/dev/null 2>&1; then
+  echo "ERROR: mcp-shim not reachable at $SHIM_URL (is it running?)" >&2
   exit 1
 fi
 if [ ! -f "$PROMPT_FILE" ]; then
@@ -120,7 +133,20 @@ WORK_DIR=$(mktemp -d)
 trap 'rm -rf "$WORK_DIR"' EXIT
 
 # ── MCP config ────────────────────────────────────────────────────────────────
-cat > "$WORK_DIR/mcp.json" <<'EOF'
+if [ "$TRANSPORT" = "http" ]; then
+  echo "── Transport: http (shim: $SHIM_URL)"
+  cat > "$WORK_DIR/mcp.json" <<EOF
+{
+  "mcpServers": {
+    "dns-mcp": {
+      "type": "http",
+      "url": "$SHIM_URL"
+    }
+  }
+}
+EOF
+else
+  cat > "$WORK_DIR/mcp.json" <<'EOF'
 {
   "mcpServers": {
     "dns-mcp": {
@@ -130,6 +156,7 @@ cat > "$WORK_DIR/mcp.json" <<'EOF'
   }
 }
 EOF
+fi
 
 # ── Permissions ───────────────────────────────────────────────────────────────
 ALLOWED_TOOLS_FLAG=()
@@ -280,6 +307,8 @@ MSGEOF
     -p "$user_msg" \
     --model "$MODEL" \
     --mcp-config "$WORK_DIR/mcp.json" \
+    --settings "$SCRIPT_DIR/soc_forensics_settings.json" \
+    --strict-mcp-config \
     --system-prompt-file "$PROMPT_FILE" \
     --output-format json \
     --max-turns 30 \

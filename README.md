@@ -330,7 +330,9 @@ dns-mcp/
 ├── requirements.txt       # Python dependencies
 ├── test-mcp-stdio.sh      # End-to-end stdio test
 ├── prompts/               # Analyst prompt text files (MCP prompts)
-├── tools/                 # CLI shell tool wrappers
+├── tools/
+│   ├── check_shim.sh          # Verify mcp-shim + dns-mcp stack end-to-end
+│   └── soc_email_forensics.sh # AI forensics on raw .eml files (stdio or http)
 └── tests/
     └── test_tools.py      # pytest unit tests
 ```
@@ -345,12 +347,69 @@ pre-commit install
 That's it. On every commit, ruff will lint and auto-fix staged Python files.
 The full test suite (pytest + stdio e2e) runs in CI on every push and pull request.
 
-## Remote / HTTP Transport
+## HTTP Transport via mcp-shim
 
-The `remote` branch contains the HTTP Streamable transport version of this
-server, including a Flask auth proxy sidecar, bearer token authentication,
-fail2ban integration, and instructions for exposing the server via an HTTPS
-reverse proxy. See that branch if you need network-accessible deployment.
+For clients that need MCP Streamable HTTP transport instead of stdio (headless
+batch workflows, remote access via reverse proxy), use
+[mcp-shim](../mcp-shim) — a lightweight Go bridge that exposes the stdio
+server over HTTP without modifying `server.py`.
+
+### Start the shim
+
+```bash
+nohup ~/projects/mcp-shim/mcp-shim \
+  --addr 127.0.0.1:58676 \
+  --idle 30m \
+  -- docker run --rm -i --dns 9.9.9.9 dns-mcp python server.py \
+  > /tmp/shim.log 2>&1 &
+
+curl -sf http://127.0.0.1:58676/health && echo "shim ready"
+```
+
+- Listens on loopback only (port 58676)
+- Spins up one dns-mcp docker container per MCP session
+- Containers are reaped after 30 minutes of inactivity
+- `tail -f /tmp/shim.log` shows live tool call traffic
+
+### MCP config for HTTP clients
+
+```json
+{
+  "mcpServers": {
+    "dns-mcp": {
+      "type": "http",
+      "url": "http://127.0.0.1:58676/mcp"
+    }
+  }
+}
+```
+
+### Verify the stack end-to-end
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...
+./tools/check_shim.sh                    # looks up deflationhollow.net
+./tools/check_shim.sh example.com        # or any domain
+```
+
+Runs a single `dns_query` tool call via claude (~10s, ~$0.001). Confirms API
+key, shim reachability, docker startup, and MCP tool call routing in one shot.
+Any failure is reported before tokens are spent.
+
+### Session lifecycle
+
+Each `initialize` from an MCP client spawns a fresh dns-mcp container. For
+long-running clients (interactive claude sessions, claude.ai), the container
+stays warm for the session duration and is reaped after 30 minutes idle.
+Batch scripts that invoke `claude -p` per email get one container per email —
+acceptable overhead, and reliable because docker startup is managed by the shim
+rather than racing against the client's subprocess timeout.
+
+### Remote access
+
+For network-accessible deployment, put Caddy (or nginx) in front of the shim
+with TLS termination and auth. The shim itself has no authentication — keep it
+on loopback and let the reverse proxy handle access control.
 
 ## License
 
