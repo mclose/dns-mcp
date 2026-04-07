@@ -14,7 +14,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROMPT_FILE="$SCRIPT_DIR/../prompts/soc_email_forensics.txt"
+PROMPT_FILE="$SCRIPT_DIR/../prompts/soc_email_forensics_batch.txt"
 
 # ── Parse flags ───────────────────────────────────────────────────────────────
 AUTO_APPROVE=false
@@ -23,6 +23,7 @@ TEXT_MODE=false
 MODEL=claude-sonnet-4-6
 TRANSPORT=stdio
 SHIM_URL="http://127.0.0.1:58676/mcp"
+OUT_DIR=""
 POSITIONAL=()
 SKIP_NEXT=false
 PREV_ARG=""
@@ -33,6 +34,7 @@ for arg in "$@"; do
       -m|--model)     MODEL="$arg" ;;
       --transport)    TRANSPORT="$arg" ;;
       --shim-url)     SHIM_URL="$arg"; TRANSPORT=http ;;
+      --out-dir)      OUT_DIR="$arg" ;;
     esac
     continue
   fi
@@ -44,6 +46,7 @@ for arg in "$@"; do
     --transport)     PREV_ARG="$arg"; SKIP_NEXT=true ;;
     --transport=*)   TRANSPORT="${arg#--transport=}" ;;
     --shim-url)      PREV_ARG="$arg"; SKIP_NEXT=true ;;
+    --out-dir)       PREV_ARG="$arg"; SKIP_NEXT=true ;;
     -h|--help)
       echo "Usage: $(basename "$0") [options] <email.txt|->"
       echo ""
@@ -59,6 +62,7 @@ for arg in "$@"; do
       echo "  -m, --model MODEL        Claude model (default: claude-sonnet-4-6)"
       echo "  --transport stdio|http   MCP transport (default: stdio — spawns docker per run)"
       echo "  --shim-url URL           Shim URL for http transport (default: http://127.0.0.1:58676/mcp)"
+      echo "  --out-dir DIR            Write output files here (default: current directory)"
       echo "  -h, --help               Show this help"
       echo ""
       echo "Input:"
@@ -111,7 +115,7 @@ if [ ! -f "$PROMPT_FILE" ]; then
   exit 1
 fi
 
-ORIG_DIR="$(pwd)"
+ORIG_DIR="${OUT_DIR:-$(pwd)}"
 TIMESTAMP=$(date -u +%Y%m%dT%H%M%SZ)
 
 # ── Two-pass cost warning ──────────────────────────────────────────────────────
@@ -315,6 +319,13 @@ MSGEOF
     "${ALLOWED_TOOLS_FLAG[@]}" \
     > "$raw_out"
 
+  # Save raw claude wrapper JSON (tool call I/O + full conversation) alongside output
+  local raw_dest="${out_file%.json}.raw.json"
+  if [ "$mode" = "text" ]; then
+    raw_dest="${out_file%.txt}.raw.json"
+  fi
+  cp "$raw_out" "$raw_dest"
+
   # Extract text + cost metadata from claude JSON wrapper, write output file
   python3 - "$raw_out" "$out_file" "$mode" <<'PYEOF'
 import sys, json, re
@@ -355,6 +366,14 @@ else:
             data = json.loads(block)
         except json.JSONDecodeError as e:
             data = {"parse_error": str(e), "raw_block": block[:500]}
+    if data is None:
+        # Fallback: code-fence wrapped JSON without sentinels
+        m2 = re.search(r'```(?:json)?\s*([\s\S]*?)\s*```', text)
+        if m2:
+            try:
+                data = json.loads(m2.group(1))
+            except json.JSONDecodeError:
+                pass
     if data is None:
         data = {}
     # Fallbacks
