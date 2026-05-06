@@ -1,115 +1,171 @@
 # DNS MCP Server — Developer Guide
 
-FastMCP server exposing DNS security analysis tools via stdio transport.
-One Docker container per session, spawned by the MCP client, no ports or auth.
+FastMCP Streamable HTTP server. OAuth via Pocket ID. Tool implementations are
+thin wrappers around the `dns_tool` library — `dns_tool` owns all DNS logic;
+this server owns auth bootstrap and tool/prompt registration.
 
-See `README.md` for usage. This file is for working in the codebase.
+See `README.md` for usage and architecture. This file is for working in the
+codebase.
 
-## Key files
+## Layout
 
-| File | Purpose |
-|------|---------|
-| `server.py` | All tools, helpers, and prompts — the whole server (~5100 lines) |
-| `tests/test_tools.py` | pytest unit tests (call tool functions directly) |
-| `test-mcp-stdio.sh` | End-to-end MCP protocol test over stdin/stdout |
-| `Makefile` | `make build` / `make test` / `make shell` |
-| `prompts/` | MCP analyst prompt text files |
+```
+src/dns_mcp/
+├── __init__.py
+├── __main__.py     # entrypoint — `python -m dns_mcp`
+├── config.py       # pydantic-settings Settings class
+├── auth.py         # JWKSTokenVerifier (validates JWTs from Pocket ID JWKS)
+└── server.py       # FastMCP app: OAuth routes + 16 tools + 4 prompts
+```
+
+`server.py.legacy` is the pre-2.0.0 stdio server kept as a reference for
+porting the 11 deferred tools. Do not modify it; new tool work goes in
+`dns_tool` and re-registers a one-line wrapper here.
 
 ## Build & test
 
 ```bash
-make build          # rebuild Docker image (required after any code change)
-make test           # pytest in container (276 tests)
-./test-mcp-stdio.sh # end-to-end MCP protocol test (38 tests)
-make shell          # interactive shell inside the container
+make build           # rebuild Docker image
+make lint            # pre-commit run --all-files (ruff check + format)
+make import-check    # verify create_server() registers all tools
+make shell           # interactive shell inside the container
 ```
 
-**Always run `make build` before `make test` or `./test-mcp-stdio.sh`** — tests
-run inside the container, so a stale image means stale code under test.
+`tests/` is currently the legacy stdio test suite and is excluded from CI lint
++ formatting via `pyproject.toml`'s `[tool.ruff] extend-exclude`. Pytest
+target is dropped from the Makefile until the suite is rewritten against the
+new FastMCP architecture.
+
+## Adding a tool
+
+1. Implement the function in the appropriate `dns_tool` module
+   (`dns_tool.core`, `dns_tool.email`, `dns_tool.intel`, `dns_tool.rdap`).
+2. Add tests on the library side (`packages/dns_tool/tests/`).
+3. Bump dns_tool version (`make bump-dns_tool V=X.Y.Z` in `claude-packages`)
+   and rebuild the tarball.
+4. Update the URL pin in `pyproject.toml` if the tarball name changed.
+5. Register a wrapper in `src/dns_mcp/server.py`:
+
+```python
+@app.tool()
+async def check_foo(domain: Domain) -> dict[str, Any]:
+    """Tool-level description for the LLM. One paragraph minimum.
+
+    Explain what this checks, what the structured return looks like, and
+    when an analyst should reach for it.
+    """
+    return await asyncio.to_thread(_check_foo, domain, DOH_ENDPOINT)
+```
+
+Key conventions:
+
+- **Type aliases at module top** — `Domain`, `DnsQType`, `IPv4`, `IPAddress`,
+  `DkimSelector`, `Port`, `Proto`. Reuse, do not redefine. They carry
+  Pydantic `Field` metadata (descriptions, regex patterns, ranges) that
+  flows into the JSON Schema the LLM sees.
+- **`asyncio.to_thread`** wraps every synchronous `dns_tool` call so the
+  FastMCP event loop is not blocked by network I/O.
+- **Docstring is the tool description** — FastMCP introspects the function
+  and uses the docstring as the tool descriptor `description` field. Write
+  for the LLM: what it does, what comes back, when to use it.
+- **No business logic in this layer** — anything beyond a one-line
+  `to_thread` wrapper is a sign the function belongs in `dns_tool`.
+
+## Pydantic Field pattern
+
+Every parameter that is not a primitive bool gets an `Annotated[T, Field(...)]`
+type. Define type aliases at module top to avoid repetition:
+
+```python
+DnsQType = Literal["A", "AAAA", "MX", "TXT", ...]
+
+Domain = Annotated[
+    str,
+    Field(
+        description="Fully-qualified domain name (e.g. 'example.com').",
+        pattern=r"^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?...",
+        max_length=253,
+    ),
+]
+```
+
+Three benefits:
+
+1. **Schema enforcement at MCP boundary** — FastMCP rejects malformed input
+   before `dns_tool` is called.
+2. **Better LLM accuracy** — `Literal[...]` enums let the tool-use sampler
+   pick from the exact valid set; descriptions and regex patterns are
+   surfaced in the tool descriptor.
+3. **Single source of truth** — no drift between docstring and runtime
+   behavior; the annotation is the doc, the validation, and the schema.
+
+Why `str` and not Pydantic IP types: `dns_tool` functions take strings.
+`pydantic.IPvAnyAddress` would coerce to `IPv4Address` objects and require
+`str()` at the call site. Patterns + `str` is clearer and matches what the
+library wants.
+
+## OAuth bootstrap
+
+Three custom routes mounted by FastMCP, lifted verbatim from tiny-mcp:
+
+| Route | Purpose |
+|-------|---------|
+| `GET /.well-known/oauth-authorization-server` | Discovery doc — issuer is Pocket ID, authorization & registration endpoints proxy through us, token & jwks endpoints point straight at Pocket ID |
+| `GET /oauth/authorize` | Inject `scope=openid profile email` if Claude.ai omits it, then 302 to Pocket ID |
+| `POST /oauth/register` | Dynamic Client Registration — creates a new OIDC client on Pocket ID via admin API, returns DCR-shaped response to the MCP client |
+
+`POST /mcp` (the tool endpoint) is auth-gated: bearer JWT verified against
+Pocket ID JWKS by `JWKSTokenVerifier` before any `@app.tool()` handler runs.
 
 ## Allowed commands
 
 These run without confirmation (saved in `~/.claude/settings.json`):
-- `make build` / `make test` / `make shell` / `make rebuild`
-- `./test-mcp-stdio.sh`
+
+- `make build` / `make lint` / `make import-check` / `make rebuild` / `make shell`
+- `make deploy` / `make logs` / `make status`
 - `git add` / `git commit` / `git push` / `git pull` / `git status` / `git diff` / `git log` / `git stash`
-- `docker run --rm dns-mcp python -c "..."` — debug snippets in container
 - `gh release view/list`, `gh pr view/list/diff`, `gh issue view/list`, `gh run view/list`, `gh api`
 
 **Always confirm before running:**
+
 - `git tag` — creating a version tag
 - `gh release create` — publishing a GitHub release
 - Any `git push --force` or destructive git operation
 
-## Adding a new tool — checklist
-
-When you add a tool, update **all** of these or the tests and e2e will fail:
-
-1. `server.py` — implement the tool with `@mcp.tool()`
-2. `server.py` — bump the tool count in the module docstring banner
-3. `tests/test_tools.py` — add the tool to the import list
-4. `tests/test_tools.py` — add a `TestCheckFoo` class
-5. `README.md` — add a row to the appropriate tools table; update count in Architecture section and file structure comment
-6. `test-mcp-stdio.sh` — increment expected tool count; add a `call_tool` invocation (renumber subsequent tests)
-7. Run `make build && make test && ./test-mcp-stdio.sh` to verify
-
-## Tool structure
-
-Every tool follows this pattern:
-
-```python
-@mcp.tool()
-def check_foo(
-    domain: str = Field(description="..."),
-    nameserver: str | None = Field(default=None, description=f"Nameserver IP (default: {DEFAULT_RESOLVER})"),
-) -> dict:
-    valid, result = validate_domain(domain)
-    if not valid:
-        return {"error": result, "domain": domain}
-    ns = nameserver if nameserver is not None else DEFAULT_RESOLVER
-    # ... do the work ...
-    return {
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "domain": domain,
-        # ... results ...
-        "errors": [],
-    }
-```
-
-Key conventions:
-- **Validation first** — `validate_domain`, `validate_selector`, `validate_port` before any I/O
-- **Error key** — return `{"error": "..."}` (singular) on validation failure; use `"errors": []` (list) on query failures
-- **`DEFAULT_RESOLVER`** — use the constant, never hardcode `"9.9.9.9"`
-- **No shell execution** — all DNS via dnspython, RDAP via `requests`, nothing else
-- **Nameserver validation** — if a caller-supplied nameserver is accepted, validate it with `ipaddress.ip_address()`
-- **TXT lookups** — use shared `_query_all_txt_records()` helper (returns list of strings)
-
-## Testing conventions
-
-Tests call tool functions directly — **not** via the MCP protocol. This means:
-
-- Pydantic `Field(default=...)` values do **not** inject automatically
-- Always pass every parameter explicitly, including those with defaults:
-  ```python
-  # Wrong — nameserver won't default to DEFAULT_RESOLVER
-  result = check_foo("example.com")
-  # Right
-  result = check_foo("example.com", nameserver="9.9.9.9")
-  ```
-- Tests run against live DNS — they must tolerate intercepted/proxied networks
-- Use `detect_hijacking("9.9.9.9")["checks"]` → `transparent_proxy.passed` as
-  the signal to relax DNSSEC-dependent assertions (intercepting proxies strip
-  the AD flag, turning `dane_valid` into `dane_present_no_dnssec`)
-- Quad9 intermittently returns "insecure" for signed zones — use
-  `_dnssec_validate_with_fallback(domain, rdtype)` (defined in test_tools.py)
-  for any assertion that expects `"fully validated"`; it retries against `1.1.1.1`
-- Check structure and types rather than exact record values
-
 ## Coding standards
 
-- `ruff` runs on every commit (pre-commit hook) — it will auto-format staged files; stage the result and commit again if it fires
-- Security-first: no `eval`, `exec`, `os.system`, or `shell=True`
-- Input validation via explicit allow-lists (`validate_domain` regex, `validate_selector` regex, `validate_port` range check)
+- `ruff` runs on every commit (pre-commit hook) — auto-formats staged Python
+  files. Stage the result and commit again if it fires.
+- CI runs `pre-commit run --all-files` (lint job) plus a build + import-check
+  job that instantiates `create_server()` and asserts ≥16 tools register.
+- Snyk runs on every PR for vulnerability scanning.
+- Security-first: no `eval`, `exec`, `os.system`, or `shell=True`.
+- Input validation via Pydantic `Field` constraints at the MCP boundary.
+
+## Deployment
+
+`make deploy` pushes to two remotes:
+
+- `origin` (GitHub, source of truth)
+- `vps` (bare repo on docker-nyc3 — post-receive hook checks out main and
+  runs `docker compose up -d`)
+
+Container runs as part of the `gateway` (Caddy on docker-nyc3) `proxy-net`
+Docker bridge. Caddy vhost lives in `mclose/gateway:conf.d/dns-mcp.conf`.
+
+## Pre-2.0.0 notes (porting reference)
+
+The 11 tools listed in README "Open work" still live in `server.py.legacy`.
+When porting:
+
+- The legacy implementations include extensive risk-flag enumerations,
+  DNSSEC validation patterns, and test zone references — preserve them.
+- Move the implementation into the appropriate `dns_tool` module; the MCP
+  wrapper here is one line.
+- The `~/.claude/projects/-home-mclose-projects-dns-mcp/memory/MEMORY.md`
+  index has detailed notes on `check_caa`, `check_zone_transfer`, NSEC3
+  test zones, and other pre-2.0.0 implementation details. Read it before
+  starting a port.
 
 ## NSEC/NSEC3 test zones
 
@@ -123,11 +179,5 @@ Live zones on `deflationhollow.net` for testing denial-of-existence tools:
 | `nsec3-optout.deflationhollow.net` | NSEC3 | opt-out flag set |
 
 All four zones are DNSSEC-signed with DS records in the parent. Use them as
-primary targets in `TestNsecInfo` — avoid zones you don't control (Cloudflare
-wildcard responses return NOERROR instead of NXDOMAIN, breaking NSEC probes).
-
-## `remote` branch
-
-The `remote` branch is a separate variant with HTTP/Streamable transport,
-a Flask auth proxy, bearer token auth, fail2ban, and ngrok instructions.
-Do not merge remote-branch concerns into main.
+primary targets in tests for `nsec_info` (and the deferred port of
+`check_caa`'s NSEC3 logic).

@@ -6,410 +6,255 @@ DNSSEC chain validation, email authentication posture, and registration
 intelligence — without leaving your chat session.
 
 Built by a cybersecurity professional for SOC investigation workflows.
-Not a toy — the same queries you'd run at the command line, accessible
+Not a toy — the same queries you would run at the command line, accessible
 through any MCP-compatible assistant in real time.
+
+## Architecture (2.0.0)
+
+dns-mcp is a Streamable HTTP MCP server with OAuth via [Pocket
+ID](https://pocket-id.org/). Tool implementations are thin wrappers around the
+[`dns_tool`](https://github.com/mclose/claude-packages) Python library, which
+owns all DNS logic. The server itself is ~430 lines of code: auth bootstrap,
+tool registration, and prompt loading.
+
+```
+Claude.ai / Claude Code / any MCP client
+              │
+              │ Streamable HTTP + OAuth bearer (JWT)
+              ▼
+       Caddy reverse proxy           (TLS, DNS-01 / Let's Encrypt)
+              │
+              ▼
+     dns-mcp container               (FastMCP, OAuth verifier)
+              │
+              ▼
+        dns_tool library             (DoH client, validators, parsers)
+              │
+              ▼
+   doh.lab.deflationhollow.net      (Unbound DoH resolver, optional)
+```
+
+Three benefits over the previous stdio-only architecture:
+
+1. **Network-accessible** — hosted MCP servers can serve any client, not just
+   ones that can spawn a local subprocess.
+2. **OAuth-protected** — bearer JWTs verified against Pocket ID JWKS; per-user
+   identity available to tools via `whoami`.
+3. **Library-first** — `dns_tool` is published independently and reusable. The
+   same code powers a CLI, this MCP server, and (eventually) a REST API.
+
+The old stdio architecture lives at `server.py.legacy` for porting reference.
+The `remote` branch (mcp-shim Go bridge) is deprecated.
 
 ## Tools
 
-### DNS Tools
+dns-mcp 2.0.0 currently exposes **16 tools**. Eleven additional tools from the
+1.x stdio architecture are pending port into `dns_tool` — see
+[Open work](#open-work).
+
+### Meta
+
 | Tool | Description |
 |------|-------------|
-| `dns_query` | Standard DNS lookups (A, AAAA, MX, TXT, NS, SOA, CNAME, PTR, SRV, DNSKEY, DS, TLSA, CAA, SSHFP, RRSIG, CDS, CDNSKEY, HTTPS, SVCB, NAPTR) |
-| `dns_dig_style` | Detailed dig-style output with DNSSEC flags (DO flag set) — same 20 record types |
-| `dns_query_dot` | DNS over TLS (DoT) query — TLS session info, EDNS pseudosection, DNSSEC flags — same 20 record types |
-| `dns_dnssec_validate` | Chain-of-trust validation like `delv +vtrace`; cross-checks verdict against resolver AD flag and flags discrepancies |
-| `nsec_info` | NSEC/NSEC3 denial-of-existence analysis and zone walkability assessment |
-| `reverse_dns` | PTR lookup + forward-confirmed rDNS (FCrDNS) verification — essential for mail server identity |
-| `timestamp_converter` | Convert between ISO, epoch, and human-readable timestamps |
-| `detect_hijacking` | Test a resolver for DNS hijacking/tampering (NXDOMAIN probe, known record, DNSSEC, identity) |
+| `ping` | Server uptime, current timestamp, dns_tool version + commit hash |
+| `whoami` | Authenticated user identity from JWT claims |
 
-### Email Security Tools
+### DNS
+
+| Tool | Description |
+|------|-------------|
+| `dns_query` | Standard DNS lookup over DoH — 20 record types (A, AAAA, MX, TXT, NS, SOA, CNAME, PTR, SRV, CAA, DNSKEY, DS, RRSIG, NSEC, NSEC3, TLSA, SSHFP, HTTPS, SVCB, NAPTR) |
+| `dnssec_validate` | Full DNSSEC chain walk from IANA root trust anchor down to target. Real cryptographic validation at every zone cut. Returns structured `verdict` + per-zone findings + event transcript |
+| `nsec_info` | NSEC / NSEC3 denial-of-existence analysis — zone walkability assessment, NSEC3 hash parameters, opt-out detection |
+
+### Email security
+
 | Tool | Description |
 |------|-------------|
 | `check_spf` | SPF record parsing with recursive include resolution (RFC 7208 10-lookup limit) |
 | `check_dmarc` | DMARC policy retrieval with organizational domain fallback |
-| `check_dkim_selector` | DKIM public key record verification for a selector+domain pair |
-| `check_bimi` | BIMI record and VMC (Verified Mark Certificate) check |
-| `check_mta_sts` | MTA-STS DNS record + HTTPS policy file fetch (mode, MX patterns, max_age) |
-| `check_smtp_tlsrpt` | SMTP TLS Reporting record check |
-| `check_dane` | DANE TLSA record check with DNSSEC validation for a domain's MX hosts |
-| `check_tlsa` | Standalone TLSA record lookup for any hostname, port, and protocol |
+| `check_dkim` | DKIM public key record verification for a selector + domain pair |
+| `check_dane` | DANE TLSA records for all MX hosts of a domain |
+| `check_tlsa` | Standalone TLSA record lookup at `_<port>._<proto>.<host>` |
+
+### Threat intelligence
+
+| Tool | Description |
+|------|-------------|
+| `check_rbl` | IP reputation against 8 DNS-based RBLs (Spamhaus ZEN, SpamCop, UCEProtect L1/L2, Mailspike, PSBL, Barracuda, SORBS) |
+| `check_dbl` | Domain reputation against DNS-based Domain Block Lists (Spamhaus DBL, URIBL, SURBL) |
+| `cymru_asn` | ASN lookup via Team Cymru DNS service — BGP prefix, org, country |
+| `check_fast_flux` | Fast-flux detection — repeated A/AAAA queries to identify rotating IPs and short TTLs |
+| `detect_hijacking` | Test a recursive resolver for tampering — NXDOMAIN wildcards, DNSSEC handling, identity |
+
+### Registration
+
+| Tool | Description |
+|------|-------------|
 | `rdap_lookup` | Domain registration data via RDAP (modern WHOIS replacement) |
-| `check_rbl` | IP reputation check against 8 DNS-based RBLs (Spamhaus ZEN, SpamCop, UCEProtect L1/L2, Mailspike, PSBL, Barracuda, SORBS); optional Spamhaus DQS key via `SPAMHAUS_DQS_KEY` env var |
 
-### Threat Intelligence
-| Tool | Description |
-|------|-------------|
-| `check_dbl` | Domain reputation check against DNS-based Domain Block Lists (Spamhaus DBL, URIBL, SURBL) |
-| `cymru_asn` | ASN lookup via Team Cymru DNS service — BGP prefix, org name, country, and high-risk ASN flag |
-| `check_fast_flux` | Fast-flux detection — repeated A/AAAA queries to identify rotating IPs and suspiciously short TTLs; signals botnet/phishing infrastructure |
-| `check_ct_logs` | Certificate Transparency log enumeration via crt.sh — unique subdomain names, per-cert issuer/validity details, wildcard detection, and CAA cross-reference with correct O= field mapping |
-| `check_caa` | CAA record analysis with CNAME chain tracing and wildcard delegation detection — tree-climbs for effective policy, follows CNAME chains, detects wildcard CNAMEs that delegate CAA authority to third parties (RFC 8659 §3), surfaces RFC 8657 binding gaps |
-| `check_zone_transfer` | AXFR zone transfer attempt against every authoritative NS — open transfer is a NIST SP 800-81r3 §3.1 violation; returns full zone contents (names, record type summary) when transfer succeeds |
+## Tool descriptors
 
-### Utility
-| Tool | Description |
-|------|-------------|
-| `ping` | Health check — returns pong with timestamp |
-| `server_info` | Show resolver config: dnspython version, nameservers, EDNS settings |
-| `quine` | Returns the source code of this server |
-| `session_stats` | Per-tool call counts, error rates, and latency for this container session |
-| `reset_stats` | Reset session stats and clock without restarting the container |
+All 16 tools use Pydantic `Field` for parameter descriptors. The LLM sees:
 
-## Resources
+- **Per-parameter descriptions** explaining what the parameter means
+- **`Literal[...]` enums** for record types and protocols (no string-guessing)
+- **Regex patterns** validating FQDN syntax, IPv4 dotted-quad, DKIM selector format
+- **Length and range constraints** (port 1–65535, FQDN max 253 chars, etc.)
 
-Three reference resources are available to MCP clients that support resource
-reading. They cover tool-specific output vocabulary that a client AI cannot
-infer from tool schemas alone — field meanings, status codes, and RBL return
-codes specific to this server's output format.
-
-| Resource URI | Contents |
-|-------------|----------|
-| `dns-mcp://output-guide` | Field-by-field reference: DNSSEC chain status values, DS vs DNSKEY parent/child relationship, FCrDNS fields, DANE status, RBL listed/clean/error semantics, detect_hijacking `passed` convention |
-| `dns-mcp://rbl-reference` | Return code tables for all 8 RBLs including Spamhaus quota codes |
-| `dns-mcp://test-zones` | Live NSEC/NSEC3 test zones on deflationhollow.net with parameters and risk levels |
-
-Resources are pull-based — clients load them on demand, not on every message.
+Constraints are advertised in the tool descriptor JSON Schema and enforced at
+the MCP boundary by FastMCP — invalid input is rejected before `dns_tool` is
+called. See `src/dns_mcp/server.py` for the type alias definitions.
 
 ## Analyst Prompts
 
-The server ships with four analyst prompt templates. Any MCP-compatible client
-can list and invoke them — no Claude-specific configuration required.
+Four analyst prompt templates ship with the server. Any MCP-compatible client
+that supports prompts can list and invoke them.
 
 | Prompt | What it does |
 |--------|-------------|
-| `email_security_audit` | Domain email security audit: SPF, DKIM, DMARC, MTA-STS, BIMI — graded A through F with prioritized recommendations |
-| `dnssec_chain_audit` | Full DNSSEC chain-of-trust audit from the IANA root trust anchor down to the target domain |
-| `soc_email_forensics` | Forensic phishing analysis of a raw email (.eml or pasted headers) — returns TRUSTABLE / SUSPICIOUS / PHISHING / FURTHER ANALYSIS REQUIRED |
-| `nist_800_81r3_audit` | Domain security posture audit aligned with NIST SP 800-81r3 — covers delegation integrity, DNSSEC, CAA, email authentication, reputation, and resolver integrity |
+| `email_security_audit` | SPF, DKIM, DMARC, MTA-STS, BIMI — graded A through F with prioritized recommendations |
+| `dnssec_chain_audit` | Full DNSSEC chain-of-trust audit from IANA root down to target |
+| `soc_email_forensics` | Forensic phishing analysis of a raw email — TRUSTABLE / SUSPICIOUS / PHISHING / FURTHER ANALYSIS REQUIRED |
+| `nist_800_81r3_audit` | Domain security posture audit aligned with NIST SP 800-81r3 |
 
-Prompts set the analyst context and tool-use strategy for the session. The LLM
-runs the appropriate tools in sequence and synthesizes a structured report.
-
-**Client support note:** MCP prompt invocation requires client-side UI support.
-Claude Code CLI supports prompts via slash commands (see Quick Start §4).
-Claude Desktop currently exposes MCP tools only — prompts are registered but
-not reachable from the UI. Use tools ad-hoc in Desktop, or describe the
-analysis you want and the model will apply the same workflow.
+Prompt invocation requires client-side UI support. Claude Code surfaces them
+as `/mcp__dns-mcp__<prompt_name>`. Claude.ai web exposes prompts via the
+slash-command picker. Use tools ad-hoc in clients that do not support prompts.
 
 ## Example
 
 Ask your assistant: *"Check the email security posture of example.com"*
 
-The assistant calls `check_spf`, `check_dmarc`, `check_dane`, `check_mta_sts`,
-and `check_bimi` in sequence and returns a complete analysis:
-```
-✅ SPF: Hard fail (-all), 3 lookups (under RFC limit)
-✅ DMARC: p=reject, pct=100 — full enforcement, aggregate reporting configured
-✅ DANE: TLSA records present and DNSSEC-validated
-⚠️  MTA-STS: Not configured — no TLS enforcement policy published
-⚠️  BIMI: Not configured
-```
+The assistant calls `check_spf`, `check_dmarc`, `check_dane` in sequence and
+returns a complete analysis:
 
-**Overall: B+ — Strong fundamentals, two actionable gaps identified.**
+```
+✅ SPF:     Hard fail (-all), 3 lookups (under RFC limit)
+✅ DMARC:   p=reject, pct=100 — full enforcement, aggregate reporting configured
+✅ DANE:    TLSA records present and DNSSEC-validated
+```
 
 No copy-pasting dig commands. No tab-switching. One question.
 
 ## Quick Start
 
 ### Prerequisites
-- Docker
 
-### 1. Build
+- Docker
+- A Pocket ID instance (or any OIDC provider supporting Dynamic Client Registration)
+- A reverse proxy with TLS termination (Caddy, nginx, etc.)
+- A domain name pointing at your reverse proxy
+
+### 1. Pocket ID
+
+Mint an admin API key in Pocket ID's UI: **Settings → API Keys → Create new
+key**. Name it `dns-mcp` so you can revoke just this service if needed. Copy
+the key value (it is shown once).
+
+### 2. .env
+
+```bash
+POCKET_ID_BASE_URL=https://pocketid.example.com
+POCKET_ID_API_KEY=<the key from step 1>
+SERVER_URL=https://dns-mcp.example.com
+```
+
+### 3. Deploy
 
 ```bash
 git clone https://github.com/mclose/dns-mcp.git
 cd dns-mcp
-make build
+docker compose up -d
 ```
 
-### 2. Connect
+The image installs `dns_tool` as a versioned dependency (URL-pinned in
+`pyproject.toml`); `make build` is also available for direct development.
 
-Any MCP client that supports stdio transport works. The server config block
-is the same across all clients — see [Client Support](#client-support) for
-client-specific setup instructions and config file locations.
+### 4. Reverse proxy
 
-The `--dns 9.9.9.9` flag ensures DNSSEC-correct resolution regardless of the
-host's DNS configuration.
+The container listens on port 8000 (HTTP). Front it with TLS termination:
 
-### 3. Verify
-
-```bash
-make test                  # unit tests inside container
-./test-mcp-stdio.sh        # end-to-end stdio test
-```
-
-### 4. Start an analysis
-
-Once connected, just ask:
-
-> *"Check the email security posture of deflationhollow.net"*
-> *"Audit the DNSSEC chain for dnssec.works"*
-> *"Is this email headers trustworthy?"* (paste raw headers)
-> *"Run a NIST SP 800-81r3 security audit on example.com"*
-
-Clients that support MCP prompts can also invoke the structured analyst
-workflows directly — see [Client Support](#client-support) for details.
-
-## Client Support
-
-All clients use the same server block. The `command` and `args` are identical
-everywhere — only the config file location and prompt invocation differ.
-
-```json
-{
-  "mcpServers": {
-    "dns-mcp": {
-      "command": "docker",
-      "args": ["run", "--rm", "-i", "--dns", "9.9.9.9", "dns-mcp", "python", "server.py"]
+```caddy
+dns-mcp.example.com {
+    reverse_proxy dns-mcp:8000 {
+        flush_interval -1   # required for Streamable HTTP / SSE
     }
-  }
 }
 ```
 
-### Optional: Spamhaus DQS key
+If you use [`mclose/gateway`](https://github.com/mclose/gateway) (the Caddy +
+DNS-01 setup that serves dns-mcp.lab.deflationhollow.net), drop a
+`conf.d/dns-mcp.conf` matching the existing pattern.
 
-`check_rbl` queries `zen.spamhaus.org` by default. This works for occasional
-analyst use, but Spamhaus rate-limits or blocks queries from resolvers without
-a service agreement. When this happens, Spamhaus returns administrative codes
-(`127.255.255.252–255`) that the tool detects and surfaces as an error on that
-RBL entry — not a false listing — with a message explaining the cause.
+### 5. Connect
 
-For reliable, unrestricted access, set your free
-[Spamhaus Data Query Service](https://www.spamhaus.com/free-trial/sign-up-for-a-free-data-query-service-account/)
-key via the `SPAMHAUS_DQS_KEY` environment variable — the tool will
-automatically switch to the DQS zone:
+Add `https://dns-mcp.example.com/mcp` as a connector in your MCP client. The
+OAuth flow runs once on first connect — Claude.ai redirects to Pocket ID, you
+authenticate, the server creates a DCR client on your Pocket ID instance, and
+returns a JWT. Subsequent tool calls send that JWT as a bearer token; the
+server verifies against Pocket ID JWKS.
 
-```json
-{
-  "mcpServers": {
-    "dns-mcp": {
-      "command": "docker",
-      "args": ["run", "--rm", "-i", "--dns", "9.9.9.9", "-e", "SPAMHAUS_DQS_KEY", "dns-mcp", "python", "server.py"],
-      "env": { "SPAMHAUS_DQS_KEY": "your-key-here" }
-    }
-  }
-}
-```
+## Open work
 
-### Claude Desktop
+Eleven tools from the 1.x stdio architecture are not yet ported into
+`dns_tool` and are therefore not registered in 2.0.0:
 
-**Prompts:** Not supported — Desktop exposes MCP tools only. Use ad-hoc questions.
+- `check_caa` (with CNAME chain tracing and wildcard delegation detection)
+- `check_zone_transfer` (AXFR enumeration)
+- `check_bimi`, `check_mta_sts`, `check_smtp_tlsrpt`
+- `check_ct_logs` (Certificate Transparency log enumeration via crt.sh)
+- `timestamp_converter`, `reverse_dns`
+- `enumerate_dkim_selectors`, `dns_dig_style`, `dns_query_dot`
 
-Config file:
-- **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
-- **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
-- **Linux**: `~/.config/Claude/claude_desktop_config.json`
+Reference implementations live in `server.py.legacy`. Each port involves
+moving the function into the appropriate `dns_tool` module
+(`dns_tool.email`, `dns_tool.intel`, etc.), adding tests on the library
+side, and registering a one-line wrapper in `src/dns_mcp/server.py`.
 
-### Claude Code CLI
-
-**Prompts:** Full support via `/` slash commands.
-
-Add the server with one command (adds to local project config):
-
-```bash
-claude mcp add dns-mcp -- docker run --rm -i --dns 9.9.9.9 dns-mcp python server.py
-```
-
-Or add `--scope user` to make it available across all projects. Invoke prompts
-by typing `/` in the chat — the four analyst prompts appear as:
-
-```
-/mcp__dns-mcp__email_security_audit
-/mcp__dns-mcp__dnssec_chain_audit
-/mcp__dns-mcp__soc_email_forensics
-/mcp__dns-mcp__nist_800_81r3_audit
-```
-
-Type `/mcp__dns-mcp__` and tab-complete to see all four.
-
-### Gemini CLI
-
-**Prompts:** Supported (Gemini CLI implements the full MCP spec).
-
-Add the server with one command:
-
-```bash
-gemini mcp add dns-mcp -- docker run --rm -i --dns 9.9.9.9 dns-mcp python server.py
-```
-
-Or add manually to `~/.gemini/settings.json` (user scope) or
-`.gemini/settings.json` (project scope) using the same JSON block above.
-
-### Cursor
-
-**Prompts:** Verify with your installed version — Cursor MCP support is active
-and evolving. Config location: consult [Cursor MCP docs](https://docs.cursor.com/context/model-context-protocol).
-
-Add the JSON block above to your Cursor MCP config file.
-
-### VS Code (GitHub Copilot / Continue / Cline)
-
-**Prompts:** Depends on the extension — check extension documentation.
-
-Config location varies by extension. The JSON block above is the standard
-stdio format; consult your extension's MCP setup guide for the exact file path.
-
-### Zed
-
-**Prompts:** Check current Zed release notes — MCP support is active.
-Config location: consult [Zed MCP docs](https://zed.dev/docs/assistant/model-context-protocol).
-
-### Windsurf
-
-**Prompts:** Check current Windsurf release notes.
-Config location: consult Windsurf MCP documentation.
-
----
-
-> **Note on prompt support:** MCP prompts require explicit client-side UI
-> (a slash command picker or equivalent). Not all clients have implemented
-> this yet. When prompts aren't available, ask ad-hoc — the tools work the
-> same way and the model applies the same workflow.
-
-## Architecture
-
-```
-MCP Client (e.g. Claude Desktop)
-  |
-  | (spawns per-session)
-  v
-docker run --rm -i dns-mcp python server.py
-  |
-  | stdin/stdout (MCP stdio transport)
-  v
-FastMCP server (server.py)
-  |  - All 29 tools
-  |  - dnspython for DNS queries
-  |  - requests for RDAP only
-```
-
-No network ports. No auth tokens. No proxy. The MCP client manages the
-container lifecycle — one container per session, cleaned up on exit.
-
-## Day-to-Day
-
-| Command | What it does |
-|---------|-------------|
-| `make build` | Build the Docker image (uses layer cache) |
-| `make rebuild` | Full clean build, no cache — use when something feels off |
-| `make test` | Run unit tests inside the container |
-| `make shell` | Interactive shell inside the container |
-| `./test-mcp-stdio.sh` | End-to-end stdio protocol test |
-
-## Testing
-
-**Unit tests** — tool logic, input validation, error handling:
-```bash
-make test    # runs pytest inside container
-```
-
-**End-to-end stdio** — full MCP protocol over stdin/stdout:
-```bash
-./test-mcp-stdio.sh
-```
-
-## Security
-
-- No shell execution — all DNS via dnspython, RDAP via requests
-- Strict domain validation (regex allowlist)
-- IP address validation (ipaddress module)
-- Query type allowlist
-- Non-root container user (`claude`, uid 1000)
-- SPF recursion limit enforced (RFC 7208)
-- RDAP: input validated before HTTP request, 10s timeout, max 3 redirects
-
-## File Structure
+## File structure
 
 ```
 dns-mcp/
-├── server.py              # FastMCP server (29 tools, 4 prompts, stdio transport)
-├── Dockerfile             # Single-stage Alpine image
-├── docker-compose.yml     # Build target
-├── Makefile               # build/test/shell
-├── requirements.txt       # Python dependencies
-├── test-mcp-stdio.sh      # End-to-end stdio test
-├── prompts/               # Analyst prompt text files (MCP prompts)
-├── tools/
-│   ├── check_shim.sh          # Verify mcp-shim + dns-mcp stack end-to-end
-│   └── soc_email_forensics.sh # AI forensics on raw .eml files (stdio or http)
-└── tests/
-    └── test_tools.py      # pytest unit tests
+├── src/dns_mcp/
+│   ├── __init__.py
+│   ├── __main__.py            # entrypoint — create_server().run(transport="streamable-http")
+│   ├── config.py              # pydantic-settings Settings class
+│   ├── auth.py                # JWKSTokenVerifier + JWTAccessToken
+│   └── server.py              # FastMCP app: OAuth routes + 16 tools + 4 prompts (~430 lines)
+├── prompts/                   # MCP analyst prompt text files
+├── tests/                     # pytest unit tests (legacy — pending rewrite)
+├── tools/                     # operator scripts (smoke tests, deploy helpers)
+├── server.py.legacy           # 1.x stdio server (5,095 lines), reference for 11 deferred tool ports
+├── compose.yaml
+├── Dockerfile
+├── pyproject.toml             # dns_tool URL-pinned to dist tarball
+└── Makefile                   # build/lint/import-check
 ```
 
-## Contributing
+## Day-to-day
 
-```bash
-pip install pre-commit
-pre-commit install
-```
+| Command | What it does |
+|---------|-------------|
+| `make build` | Rebuild the Docker image |
+| `make rebuild` | Full clean build, no cache |
+| `make lint` | `pre-commit run --all-files` (ruff check + format) |
+| `make import-check` | Build image, run `create_server()` inside, assert tools register |
+| `make shell` | Interactive shell inside the container |
+| `make deploy` | Push to GitHub + VPS post-receive hook |
+| `make logs` | Tail container logs |
+| `make status` | Container status |
 
-That's it. On every commit, ruff will lint and auto-fix staged Python files.
-The full test suite (pytest + stdio e2e) runs in CI on every push and pull request.
+## Security
 
-## HTTP Transport via mcp-shim
-
-For clients that need MCP Streamable HTTP transport instead of stdio (headless
-batch workflows, remote access via reverse proxy), use
-[mcp-shim](../mcp-shim) — a lightweight Go bridge that exposes the stdio
-server over HTTP without modifying `server.py`.
-
-### Start the shim
-
-```bash
-nohup ~/projects/mcp-shim/mcp-shim \
-  --addr 127.0.0.1:58676 \
-  --idle 30m \
-  -- docker run --rm -i --dns 9.9.9.9 dns-mcp python server.py \
-  > /tmp/shim.log 2>&1 &
-
-curl -sf http://127.0.0.1:58676/health && echo "shim ready"
-```
-
-- Listens on loopback only (port 58676)
-- Spins up one dns-mcp docker container per MCP session
-- Containers are reaped after 30 minutes of inactivity
-- `tail -f /tmp/shim.log` shows live tool call traffic
-
-### MCP config for HTTP clients
-
-```json
-{
-  "mcpServers": {
-    "dns-mcp": {
-      "type": "http",
-      "url": "http://127.0.0.1:58676/mcp"
-    }
-  }
-}
-```
-
-### Verify the stack end-to-end
-
-```bash
-export ANTHROPIC_API_KEY=sk-ant-...
-./tools/check_shim.sh                    # looks up deflationhollow.net
-./tools/check_shim.sh example.com        # or any domain
-```
-
-Runs a single `dns_query` tool call via claude (~10s, ~$0.001). Confirms API
-key, shim reachability, docker startup, and MCP tool call routing in one shot.
-Any failure is reported before tokens are spent.
-
-### Session lifecycle
-
-Each `initialize` from an MCP client spawns a fresh dns-mcp container. For
-long-running clients (interactive claude sessions, claude.ai), the container
-stays warm for the session duration and is reaped after 30 minutes idle.
-Batch scripts that invoke `claude -p` per email get one container per email —
-acceptable overhead, and reliable because docker startup is managed by the shim
-rather than racing against the client's subprocess timeout.
-
-### Remote access
-
-For network-accessible deployment, put Caddy (or nginx) in front of the shim
-with TLS termination and auth. The shim itself has no authentication — keep it
-on loopback and let the reverse proxy handle access control.
+- No shell execution — all DNS via `dns_tool` (dnspython internally), RDAP via
+  `requests`
+- OAuth bearer JWT verification against Pocket ID JWKS on every tool call
+- Pydantic `Field` constraints enforced at MCP boundary — invalid input
+  rejected before reaching `dns_tool`
+- Non-root container user (`claude`, uid 1000)
+- SPF recursion limit enforced (RFC 7208)
+- RDAP: 10s timeout, max 3 redirects
 
 ## License
 
