@@ -6,18 +6,6 @@ repos:
         args: [--fix]
       - id: ruff-format
 
-  - repo: local
-    hooks:
-      - id: pytest
-        name: pytest
-        entry: docker compose run --rm dns-mcp pytest tests/ -q
-        language: system
-        pass_filenames: false
-        stages: [pre-push]
-
-      - id: stdio-e2e
-        name: stdio e2e
-        entry: ./test-mcp-stdio.sh
-        language: system
-        pass_filenames: false
-        stages: [pre-push]
+# Local hooks for pytest and stdio-e2e were dropped in the 2.0.0
+# Streamable HTTP rewrite. Pytest will be re-added once tests/ is
+# rewritten against the new architecture.

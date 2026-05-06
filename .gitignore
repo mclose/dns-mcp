@@ -52,3 +52,7 @@ share2claude/
 # MCP registry
 .mcpregistry_github_token
 .mcpregistry_registry_token
+
+# Editable install build artifacts
+*.egg-info/
+src/*.egg-info/
