@@ -1,0 +1,21 @@
+services:
+  dns-mcp:
+    build: .
+    container_name: dns-mcp
+    restart: unless-stopped
+    env_file: .env
+    networks:
+      - proxy-net
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+# No published ports — Caddy reaches this container via proxy-net by container name.
+# Caddy config: reverse_proxy dns-mcp:8000 (with flush_interval -1 for SSE).
+
+networks:
+  proxy-net:
+    external: true
+    name: proxy-net
