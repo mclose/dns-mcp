@@ -53,9 +53,9 @@ for arg in "$@"; do
       echo "Forensic phishing analysis of a raw email with full headers."
       echo ""
       echo "Modes (default: --json):"
-      echo "  --json          One run  → structured JSON only  (forensics-<ts>.json)"
-      echo "  --text          One run  → narrative report only (forensics-<ts>.txt)"
-      echo "  --json --text   Two runs → both files, same timestamp (costs 2x — will ask)"
+      echo "  --json          One run  → structured JSON only  (<label>.json)"
+      echo "  --text          One run  → narrative report only (<label>.txt)"
+      echo "  --json --text   Two runs → both files, same label (costs 2x — will ask)"
       echo ""
       echo "Options:"
       echo "  -y, --yes                Auto-approve dns-mcp tool permissions (skip prompt)"
@@ -166,7 +166,7 @@ fi
 ALLOWED_TOOLS_FLAG=()
 if [ "$AUTO_APPROVE" = true ]; then
   echo "── Auto-approving dns-mcp tool permissions (--yes)"
-  ALLOWED_TOOLS_FLAG=(--allowedTools "mcp__dns-mcp__*")
+  ALLOWED_TOOLS_FLAG=(--allowedTools "mcp__dns-mcp__*" --allowedTools "Bash(curl*)")
 else
   echo ""
   echo "This script uses MCP tools from the dns-mcp server."
@@ -175,7 +175,7 @@ else
   read -r -p "Allow all dns-mcp tools for this run? [y/N] " response
   case "$response" in
     [yY]|[yY][eE][sS])
-      ALLOWED_TOOLS_FLAG=(--allowedTools "mcp__dns-mcp__*")
+      ALLOWED_TOOLS_FLAG=(--allowedTools "mcp__dns-mcp__*" --allowedTools "Bash(curl*)")
       ;;
     *)
       echo "Proceeding without pre-approved permissions."
@@ -419,9 +419,14 @@ analyze_email() {
     return 1
   fi
 
-  local file_ts="${TIMESTAMP}"
-  local txt_out="${ORIG_DIR}/forensics-${file_ts}.txt"
-  local json_out="${ORIG_DIR}/forensics-${file_ts}.json"
+  local stem
+  if [ "$email_input" = "-" ]; then
+    stem="forensics-${TIMESTAMP}"
+  else
+    stem="$(basename "${email_input%.*}")"
+  fi
+  local txt_out="${ORIG_DIR}/${stem}.txt"
+  local json_out="${ORIG_DIR}/${stem}.json"
 
   echo ""
   echo "── Input:  $label"
@@ -441,6 +446,13 @@ analyze_email() {
 
   echo ""
   echo "── Done"
+  if [ "$BOTH_MODE" = true ]; then
+    echo "  → $(basename "$txt_out")  $(basename "$json_out")"
+  elif [ "$JSON_MODE" = true ]; then
+    echo "  → $(basename "$json_out")"
+  else
+    echo "  → $(basename "$txt_out")"
+  fi
 }
 
 # ── Dispatch ──────────────────────────────────────────────────────────────────
