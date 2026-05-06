@@ -21,7 +21,7 @@ import json
 import time
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any, Literal
 from urllib.parse import urlencode
 
 import dns_tool
@@ -64,12 +64,121 @@ from dns_tool.rdap import rdap_lookup as _rdap_lookup
 from mcp.server.auth.middleware.auth_context import get_access_token
 from mcp.server.auth.settings import AuthSettings
 from mcp.server.fastmcp import FastMCP
-from pydantic import AnyHttpUrl
+from pydantic import AnyHttpUrl, Field
 from starlette.requests import Request
 from starlette.responses import JSONResponse, RedirectResponse, Response
 
 from .auth import JWKSTokenVerifier, JWTAccessToken
 from .config import settings
+
+# ── Tool parameter types ─────────────────────────────────────────────────
+# Defined once and reused across @app.tool() signatures below. Pydantic Field
+# metadata (descriptions, regex patterns, length/range constraints) flows into
+# the JSON Schema FastMCP advertises via tools/list. The LLM sees the
+# constraints, FastMCP rejects malformed input at the boundary before our code
+# runs, and humans reading the source see the same definitions in one place.
+
+# DNS record types — Literal so the LLM gets the exact valid set, not "string".
+# Matches the docstring enumeration on dns_query: 20 types covering A/AAAA,
+# email auth (MX/TXT/TLSA), DNSSEC (DNSKEY/DS/RRSIG/NSEC/NSEC3), service
+# discovery (SRV/NAPTR/HTTPS/SVCB), and policy (CAA).
+DnsQType = Literal[
+    "A",
+    "AAAA",
+    "MX",
+    "TXT",
+    "NS",
+    "SOA",
+    "CNAME",
+    "PTR",
+    "SRV",
+    "CAA",
+    "DNSKEY",
+    "DS",
+    "RRSIG",
+    "NSEC",
+    "NSEC3",
+    "TLSA",
+    "SSHFP",
+    "HTTPS",
+    "SVCB",
+    "NAPTR",
+]
+
+# FQDN — RFC 1035 syntax. max_length=253 is the wire-format limit. The pattern
+# accepts labels of 1-63 chars (alphanumeric + hyphen, hyphen not first/last)
+# joined by dots. Underscores not permitted at this layer; tools that need
+# them (DKIM selectors, _service._proto labels) construct the full name
+# internally from validated components.
+Domain = Annotated[
+    str,
+    Field(
+        description=(
+            "Fully-qualified domain name (e.g. 'example.com'). No scheme, no path — just the FQDN."
+        ),
+        pattern=(
+            r"^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?"
+            r"(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*\.?$"
+        ),
+        max_length=253,
+    ),
+]
+
+# IPv4 dotted-quad. Pattern is a simple structural check (4 octets, 1-3 digits
+# each); tighter range checks happen in dns_tool when needed. Strings, not
+# IPv4Address objects, because dns_tool functions take strings.
+IPv4 = Annotated[
+    str,
+    Field(
+        description="IPv4 address in dotted-quad notation (e.g. '8.8.8.8').",
+        pattern=r"^(\d{1,3}\.){3}\d{1,3}$",
+        max_length=15,
+    ),
+]
+
+# IPv4 or IPv6 — used by tools (cymru_asn) that accept both. Loose pattern
+# accepting either form; dns_tool does the real parsing.
+IPAddress = Annotated[
+    str,
+    Field(
+        description="IP address — IPv4 (e.g. '8.8.8.8') or IPv6 (e.g. '2001:db8::1').",
+        pattern=r"^([0-9a-fA-F:.]+)$",
+        min_length=2,
+        max_length=45,
+    ),
+]
+
+# DKIM selector — the label that prefixes `_domainkey.<domain>`. RFC 6376
+# permits the same character set as DNS labels (alphanumeric + hyphen +
+# underscore in practice). max_length=63 is the DNS label limit.
+DkimSelector = Annotated[
+    str,
+    Field(
+        description=(
+            "DKIM selector — the label prefixing '_domainkey.<domain>'. "
+            "Examples: 's1', 'google', 'selector1', 'k1'. Just the label, "
+            "not the full FQDN."
+        ),
+        pattern=r"^[a-zA-Z0-9_-]+$",
+        max_length=63,
+    ),
+]
+
+# TCP/UDP port number. ge=1 / le=65535 enforces the valid range; 0 is reserved.
+Port = Annotated[
+    int,
+    Field(
+        description="TCP/UDP port number (1-65535).",
+        ge=1,
+        le=65535,
+    ),
+]
+
+# Transport protocol for TLSA records. _<port>._<proto>.<host> form requires
+# either 'tcp' or 'udp' per RFC 6698. Literal so the LLM never picks 'TCP'
+# or 'sctp' or anything else.
+Proto = Literal["tcp", "udp"]
+
 
 _START_TIME = time.time()
 # Prompt templates live at the repo root, copied to /app/prompts/ in the
@@ -235,9 +344,18 @@ def create_server() -> FastMCP:
 
     @app.tool()
     async def dns_query(
-        name: str,
-        qtype: str = "A",
-        dnssec: bool = True,
+        name: Domain,
+        qtype: DnsQType = "A",
+        dnssec: Annotated[
+            bool,
+            Field(
+                description=(
+                    "Set the DO bit (DNSSEC OK) on the query. When true, the resolver "
+                    "returns RRSIG records alongside the answer for cryptographic "
+                    "verification. Default true."
+                ),
+            ),
+        ] = True,
     ) -> dict[str, Any]:
         """Query the configured DoH resolver for an arbitrary DNS record type.
 
@@ -253,7 +371,7 @@ def create_server() -> FastMCP:
     # ── DNSSEC ────────────────────────────────────────────────────────────
 
     @app.tool()
-    async def dnssec_validate(domain: str, qtype: str = "A") -> dict[str, Any]:
+    async def dnssec_validate(domain: Domain, qtype: DnsQType = "A") -> dict[str, Any]:
         """Walk the full DNSSEC trust chain from the IANA root trust anchor down
         to <domain>, performing real cryptographic validation at every zone cut.
 
@@ -275,7 +393,7 @@ def create_server() -> FastMCP:
     # ── Email security ────────────────────────────────────────────────────
 
     @app.tool()
-    async def check_spf(domain: str) -> dict[str, Any]:
+    async def check_spf(domain: Domain) -> dict[str, Any]:
         """Retrieve and recursively parse a domain's SPF policy.
 
         Enumerates all authorized sending IPs/networks by following include
@@ -286,7 +404,7 @@ def create_server() -> FastMCP:
         return await asyncio.to_thread(_check_spf, domain, DOH_ENDPOINT)
 
     @app.tool()
-    async def check_dmarc(domain: str) -> dict[str, Any]:
+    async def check_dmarc(domain: Domain) -> dict[str, Any]:
         """Retrieve and parse a domain's DMARC policy.
 
         Falls back to the organizational domain if no policy is found at the
@@ -296,7 +414,7 @@ def create_server() -> FastMCP:
         return await asyncio.to_thread(_check_dmarc, domain, DOH_ENDPOINT)
 
     @app.tool()
-    async def check_dkim(domain: str, selector: str) -> dict[str, Any]:
+    async def check_dkim(domain: Domain, selector: DkimSelector) -> dict[str, Any]:
         """Retrieve a DKIM public key for <domain> at <selector>.
 
         Returns key type (RSA / Ed25519), key length in bits for RSA keys
@@ -305,7 +423,7 @@ def create_server() -> FastMCP:
         return await asyncio.to_thread(_check_dkim, domain, selector, DOH_ENDPOINT)
 
     @app.tool()
-    async def check_dane(domain: str) -> dict[str, Any]:
+    async def check_dane(domain: Domain) -> dict[str, Any]:
         """Check DANE/SMTP for all MX hosts of <domain>.
 
         Performs MX lookup, then queries TLSA records at port 25 for each MX
@@ -316,9 +434,9 @@ def create_server() -> FastMCP:
 
     @app.tool()
     async def check_tlsa(
-        host: str,
-        port: int = 25,
-        proto: str = "tcp",
+        host: Domain,
+        port: Port = 25,
+        proto: Proto = "tcp",
     ) -> dict[str, Any]:
         """Retrieve a TLSA record at the standard `_<port>._<proto>.<host>`
         location. Defaults to TCP port 25 (SMTP/STARTTLS).
@@ -332,7 +450,7 @@ def create_server() -> FastMCP:
     # ── Threat intelligence ───────────────────────────────────────────────
 
     @app.tool()
-    async def check_rbl(ip: str) -> dict[str, Any]:
+    async def check_rbl(ip: IPv4) -> dict[str, Any]:
         """Check an IPv4 address against 8 well-known RBLs (Spamhaus ZEN,
         Barracuda BRBL, SORBS, etc.).
 
@@ -343,7 +461,7 @@ def create_server() -> FastMCP:
         return await asyncio.to_thread(_check_rbl, ip, DOH_ENDPOINT)
 
     @app.tool()
-    async def check_dbl(domain: str) -> dict[str, Any]:
+    async def check_dbl(domain: Domain) -> dict[str, Any]:
         """Check a domain against domain block lists (Spamhaus DBL, SURBL,
         URIBL).
 
@@ -353,7 +471,7 @@ def create_server() -> FastMCP:
         return await asyncio.to_thread(_check_dbl, domain, DOH_ENDPOINT)
 
     @app.tool()
-    async def cymru_asn(ip: str) -> dict[str, Any]:
+    async def cymru_asn(ip: IPAddress) -> dict[str, Any]:
         """Look up the autonomous system (ASN) and originating prefix for an
         IP address via Team Cymru's DNS-based service.
 
@@ -363,7 +481,7 @@ def create_server() -> FastMCP:
         return await asyncio.to_thread(_cymru_asn, ip, DOH_ENDPOINT)
 
     @app.tool()
-    async def check_fast_flux(domain: str) -> dict[str, Any]:
+    async def check_fast_flux(domain: Domain) -> dict[str, Any]:
         """Detect fast-flux behavior by repeatedly querying <domain> A records
         and observing IP rotation across queries.
 
@@ -374,7 +492,7 @@ def create_server() -> FastMCP:
         return await asyncio.to_thread(_check_fast_flux, domain, DOH_ENDPOINT)
 
     @app.tool()
-    async def nsec_info(zone: str) -> dict[str, Any]:
+    async def nsec_info(zone: Domain) -> dict[str, Any]:
         """Probe a zone's NSEC / NSEC3 denial-of-existence mechanism.
 
         Returns whether NSEC or NSEC3 is in use, NSEC3 hash parameters
@@ -385,7 +503,7 @@ def create_server() -> FastMCP:
         return await asyncio.to_thread(_nsec_info, zone, DOH_ENDPOINT)
 
     @app.tool()
-    async def detect_hijacking(resolver_ip: str) -> dict[str, Any]:
+    async def detect_hijacking(resolver_ip: IPv4) -> dict[str, Any]:
         """Test a recursive resolver for tampering / NXDOMAIN hijacking by
         querying known-good and known-bad names against it.
 
@@ -398,7 +516,7 @@ def create_server() -> FastMCP:
     # ── Registration / RDAP ───────────────────────────────────────────────
 
     @app.tool()
-    async def rdap_lookup(domain: str) -> dict[str, Any]:
+    async def rdap_lookup(domain: Domain) -> dict[str, Any]:
         """Query RDAP for domain registration data.
 
         Returns registration date, expiration date, registrar, status,
