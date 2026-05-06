@@ -1,4 +1,4 @@
-.PHONY: build rebuild lint import-check shell
+.PHONY: build rebuild lint import-check shell deploy logs status
 
 build:
 	docker build -t dns-mcp:dev .
@@ -21,6 +21,16 @@ import-check: build
 
 shell:
 	docker run --rm -it --entrypoint /bin/bash dns-mcp:dev
+
+deploy:
+	git push origin main
+	git push vps main
+
+logs:
+	ssh docker-nyc3 'docker logs -f dns-mcp'
+
+status:
+	ssh docker-nyc3 'docker compose -f ~/dns-mcp/compose.yaml ps'
 
 # `test` target: dropped during the 2.0.0 rewrite. Will return once
 # tests/ is rewritten against the new FastMCP architecture.
