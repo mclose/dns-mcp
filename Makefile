@@ -1,13 +1,26 @@
-.PHONY: build rebuild test shell
+.PHONY: build rebuild lint import-check shell
 
 build:
-	docker compose build
+	docker build -t dns-mcp:dev .
 
 rebuild:
-	docker compose build --no-cache
+	docker build --no-cache -t dns-mcp:dev .
 
-test:
-	docker compose run --rm dns-mcp pytest tests/ -v
+lint:
+	pre-commit run --all-files
+
+import-check: build
+	docker run --rm \
+		-e POCKET_ID_BASE_URL=https://dummy.example.com \
+		-e POCKET_ID_API_KEY=dummy \
+		-e SERVER_URL=https://dummy.example.com \
+		--entrypoint python dns-mcp:dev \
+		-c "import asyncio; from dns_mcp.server import create_server; \
+		    app = create_server(); tools = asyncio.run(app.list_tools()); \
+		    print(f'OK: {len(tools)} tools')"
 
 shell:
-	docker compose run --rm dns-mcp /bin/bash
+	docker run --rm -it --entrypoint /bin/bash dns-mcp:dev
+
+# `test` target: dropped during the 2.0.0 rewrite. Will return once
+# tests/ is rewritten against the new FastMCP architecture.
