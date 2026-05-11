@@ -14,7 +14,23 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROMPT_FILE="$SCRIPT_DIR/../prompts/soc_email_forensics_batch.txt"
+
+# Prompt source: prefer prompt-vault (versioned, shared across projects);
+# fall back to the bundled copy so dns-mcp standalone still works.
+PROMPT_VAULT_DIR="${PROMPT_VAULT_DIR:-$HOME/projects/prompt-vault}"
+VAULT_PROMPT="$PROMPT_VAULT_DIR/prompts/soc_email_forensics/latest"
+BUNDLED_PROMPT="$SCRIPT_DIR/../prompts/soc_email_forensics_batch.txt"
+
+if [ -e "$VAULT_PROMPT" ]; then
+  PROMPT_FILE="$VAULT_PROMPT"
+  PROMPT_TARGET="$(readlink -f "$VAULT_PROMPT")"
+  PROMPT_VERSION="$(basename "$PROMPT_TARGET" .txt)"
+  echo "Using prompt soc_email_forensics/$PROMPT_VERSION from prompt-vault" >&2
+else
+  PROMPT_FILE="$BUNDLED_PROMPT"
+  PROMPT_VERSION="bundled"
+  echo "NOTE: prompt-vault not found at $PROMPT_VAULT_DIR; using bundled prompt" >&2
+fi
 
 # ── Parse flags ───────────────────────────────────────────────────────────────
 AUTO_APPROVE=false
