@@ -48,7 +48,7 @@ The `remote` branch (mcp-shim Go bridge) is deprecated.
 
 ## Tools
 
-dns-mcp 2.0.0 currently exposes **18 tools**. Eleven additional tools from the
+dns-mcp 2.0.0 currently exposes **19 tools**. Ten additional tools from the
 1.x stdio architecture are pending port into `dns_tool` — see
 [Open work](#open-work).
 
@@ -74,6 +74,7 @@ dns-mcp 2.0.0 currently exposes **18 tools**. Eleven additional tools from the
 | `check_spf` | SPF record parsing with recursive include resolution (RFC 7208 10-lookup limit) |
 | `check_dmarc` | DMARC policy retrieval with organizational domain fallback |
 | `check_dkim` | DKIM public key record verification for a selector + domain pair |
+| `enumerate_dkim_selectors` | Probe a domain for DKIM keys at well-known selector names; returns the selectors that resolve |
 | `check_dane` | DANE TLSA records for all MX hosts of a domain |
 | `check_tlsa` | Standalone TLSA record lookup at `_<port>._<proto>.<host>` |
 
@@ -107,7 +108,7 @@ where the analyst LLM produced a verdict without DNS verification.
 
 ## Tool descriptors
 
-All 18 tools use Pydantic `Field` for parameter descriptors. The LLM sees:
+All 19 tools use Pydantic `Field` for parameter descriptors. The LLM sees:
 
 - **Per-parameter descriptions** explaining what the parameter means
 - **`Literal[...]` enums** for record types and protocols (no string-guessing)

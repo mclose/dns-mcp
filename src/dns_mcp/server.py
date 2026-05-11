@@ -43,6 +43,9 @@ from dns_tool.email import (
 from dns_tool.email import (
     check_tlsa as _check_tlsa,
 )
+from dns_tool.email import (
+    enumerate_dkim_selectors as _enumerate_dkim_selectors,
+)
 from dns_tool.intel import (
     check_dbl as _check_dbl,
 )
@@ -432,6 +435,22 @@ def create_server() -> FastMCP:
         (2048+ recommended; 1024 flagged as weak), flags, and the raw record.
         """
         return await asyncio.to_thread(_check_dkim, domain, selector, DOH_ENDPOINT)
+
+    @app.tool()
+    @track("enumerate_dkim_selectors")
+    async def enumerate_dkim_selectors(domain: Domain) -> dict[str, Any]:
+        """Probe a domain for DKIM keys at a list of common selector names.
+
+        Tries well-known selectors (e.g. 's1', 'google', 'selector1',
+        'k1', 'default', 'mail') against `<sel>._domainkey.<domain>` and
+        returns the ones that resolve to a valid public key, plus the
+        total number of selectors probed.
+
+        Use when you don't know which selector a domain uses, or to
+        profile a sender's DKIM key inventory for forensics. The list of
+        selectors probed lives in `dns_tool.email.COMMON_SELECTORS`.
+        """
+        return await asyncio.to_thread(_enumerate_dkim_selectors, domain, DOH_ENDPOINT)
 
     @app.tool()
     @track("check_dane")
