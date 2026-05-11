@@ -20,6 +20,7 @@ import asyncio
 import json
 import time
 import uuid
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any, Literal
 from urllib.parse import urlencode
@@ -68,8 +69,11 @@ from pydantic import AnyHttpUrl, Field
 from starlette.requests import Request
 from starlette.responses import JSONResponse, RedirectResponse, Response
 
+from . import tracking
 from .auth import JWKSTokenVerifier, JWTAccessToken
 from .config import settings
+from .tracking import get_stats, track
+from .tracking import reset_stats as _reset_stats_impl
 
 # ── Tool parameter types ─────────────────────────────────────────────────
 # Defined once and reused across @app.tool() signatures below. Pydantic Field
@@ -317,6 +321,7 @@ def create_server() -> FastMCP:
     # ── Meta tools ────────────────────────────────────────────────────────
 
     @app.tool()
+    @track("ping")
     async def ping() -> dict[str, Any]:
         """Return current timestamp, server uptime, and dns_tool version."""
         return {
@@ -327,6 +332,7 @@ def create_server() -> FastMCP:
         }
 
     @app.tool()
+    @track("whoami")
     async def whoami() -> dict[str, Any]:
         """Return the authenticated user's identity from JWT claims."""
         token = get_access_token()
@@ -343,6 +349,7 @@ def create_server() -> FastMCP:
     # ── DNS basic ─────────────────────────────────────────────────────────
 
     @app.tool()
+    @track("dns_query")
     async def dns_query(
         name: Domain,
         qtype: DnsQType = "A",
@@ -371,6 +378,7 @@ def create_server() -> FastMCP:
     # ── DNSSEC ────────────────────────────────────────────────────────────
 
     @app.tool()
+    @track("dnssec_validate")
     async def dnssec_validate(domain: Domain, qtype: DnsQType = "A") -> dict[str, Any]:
         """Walk the full DNSSEC trust chain from the IANA root trust anchor down
         to <domain>, performing real cryptographic validation at every zone cut.
@@ -393,6 +401,7 @@ def create_server() -> FastMCP:
     # ── Email security ────────────────────────────────────────────────────
 
     @app.tool()
+    @track("check_spf")
     async def check_spf(domain: Domain) -> dict[str, Any]:
         """Retrieve and recursively parse a domain's SPF policy.
 
@@ -404,6 +413,7 @@ def create_server() -> FastMCP:
         return await asyncio.to_thread(_check_spf, domain, DOH_ENDPOINT)
 
     @app.tool()
+    @track("check_dmarc")
     async def check_dmarc(domain: Domain) -> dict[str, Any]:
         """Retrieve and parse a domain's DMARC policy.
 
@@ -414,6 +424,7 @@ def create_server() -> FastMCP:
         return await asyncio.to_thread(_check_dmarc, domain, DOH_ENDPOINT)
 
     @app.tool()
+    @track("check_dkim")
     async def check_dkim(domain: Domain, selector: DkimSelector) -> dict[str, Any]:
         """Retrieve a DKIM public key for <domain> at <selector>.
 
@@ -423,6 +434,7 @@ def create_server() -> FastMCP:
         return await asyncio.to_thread(_check_dkim, domain, selector, DOH_ENDPOINT)
 
     @app.tool()
+    @track("check_dane")
     async def check_dane(domain: Domain) -> dict[str, Any]:
         """Check DANE/SMTP for all MX hosts of <domain>.
 
@@ -433,6 +445,7 @@ def create_server() -> FastMCP:
         return await asyncio.to_thread(_check_dane, domain, DOH_ENDPOINT)
 
     @app.tool()
+    @track("check_tlsa")
     async def check_tlsa(
         host: Domain,
         port: Port = 25,
@@ -450,6 +463,7 @@ def create_server() -> FastMCP:
     # ── Threat intelligence ───────────────────────────────────────────────
 
     @app.tool()
+    @track("check_rbl")
     async def check_rbl(ip: IPv4) -> dict[str, Any]:
         """Check an IPv4 address against 8 well-known RBLs (Spamhaus ZEN,
         Barracuda BRBL, SORBS, etc.).
@@ -461,6 +475,7 @@ def create_server() -> FastMCP:
         return await asyncio.to_thread(_check_rbl, ip, DOH_ENDPOINT)
 
     @app.tool()
+    @track("check_dbl")
     async def check_dbl(domain: Domain) -> dict[str, Any]:
         """Check a domain against domain block lists (Spamhaus DBL, SURBL,
         URIBL).
@@ -471,6 +486,7 @@ def create_server() -> FastMCP:
         return await asyncio.to_thread(_check_dbl, domain, DOH_ENDPOINT)
 
     @app.tool()
+    @track("cymru_asn")
     async def cymru_asn(ip: IPAddress) -> dict[str, Any]:
         """Look up the autonomous system (ASN) and originating prefix for an
         IP address via Team Cymru's DNS-based service.
@@ -481,6 +497,7 @@ def create_server() -> FastMCP:
         return await asyncio.to_thread(_cymru_asn, ip, DOH_ENDPOINT)
 
     @app.tool()
+    @track("check_fast_flux")
     async def check_fast_flux(domain: Domain) -> dict[str, Any]:
         """Detect fast-flux behavior by repeatedly querying <domain> A records
         and observing IP rotation across queries.
@@ -492,6 +509,7 @@ def create_server() -> FastMCP:
         return await asyncio.to_thread(_check_fast_flux, domain, DOH_ENDPOINT)
 
     @app.tool()
+    @track("nsec_info")
     async def nsec_info(zone: Domain) -> dict[str, Any]:
         """Probe a zone's NSEC / NSEC3 denial-of-existence mechanism.
 
@@ -503,6 +521,7 @@ def create_server() -> FastMCP:
         return await asyncio.to_thread(_nsec_info, zone, DOH_ENDPOINT)
 
     @app.tool()
+    @track("detect_hijacking")
     async def detect_hijacking(resolver_ip: IPv4) -> dict[str, Any]:
         """Test a recursive resolver for tampering / NXDOMAIN hijacking by
         querying known-good and known-bad names against it.
@@ -516,6 +535,7 @@ def create_server() -> FastMCP:
     # ── Registration / RDAP ───────────────────────────────────────────────
 
     @app.tool()
+    @track("rdap_lookup")
     async def rdap_lookup(domain: Domain) -> dict[str, Any]:
         """Query RDAP for domain registration data.
 
@@ -525,6 +545,46 @@ def create_server() -> FastMCP:
         (look for domains registered within the last 30 days).
         """
         return await asyncio.to_thread(_rdap_lookup, domain)
+
+    # ── Observability ─────────────────────────────────────────────────────
+
+    @app.tool()
+    @track("session_stats")
+    async def session_stats() -> dict[str, Any]:
+        """Return per-tool call statistics for the current server session.
+
+        Session = process lifetime; counters reset on container restart.
+        Returns uptime, total call count, and a per-tool breakdown of
+        count / error_count / mean_ms / max_ms / first_called / last_called.
+
+        Use as the final call in a multi-tool investigation to record
+        which tools were consulted and how expensive the run was.
+        """
+        now = datetime.now(UTC)
+        uptime = (now - tracking._session_start).total_seconds()
+        per_tool = get_stats()
+        total = sum(s["count"] for s in per_tool.values())
+        return {
+            "session_start": tracking._session_start.isoformat(),
+            "current_time": now.isoformat(),
+            "uptime_seconds": round(uptime, 1),
+            "total_calls": total,
+            "tools": per_tool,
+        }
+
+    @app.tool()
+    @track("reset_stats")
+    async def reset_stats() -> dict[str, Any]:
+        """Clear all tool-call statistics and restart the session clock.
+
+        Use sparingly — once stats are cleared they cannot be recovered.
+        Returns the new session_start timestamp.
+        """
+        _reset_stats_impl()
+        return {
+            "status": "reset",
+            "session_start": tracking._session_start.isoformat(),
+        }
 
     # ── Prompts ───────────────────────────────────────────────────────────
     # Read prompt templates from prompts/ at the repo root; register each
