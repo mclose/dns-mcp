@@ -24,13 +24,22 @@ BUNDLED_PROMPT="$SCRIPT_DIR/../prompts/soc_email_forensics_batch.txt"
 if [ -e "$VAULT_PROMPT" ]; then
   PROMPT_FILE="$VAULT_PROMPT"
   PROMPT_TARGET="$(readlink -f "$VAULT_PROMPT")"
-  PROMPT_VERSION="$(basename "$PROMPT_TARGET" .txt)"
-  echo "Using prompt soc_email_forensics/$PROMPT_VERSION from prompt-vault" >&2
+  PROMPT_VERSION="soc_email_forensics/$(basename "$PROMPT_TARGET" .txt)"
+  echo "Using prompt $PROMPT_VERSION from prompt-vault" >&2
 else
   PROMPT_FILE="$BUNDLED_PROMPT"
-  PROMPT_VERSION="bundled"
+  PROMPT_VERSION="soc_email_forensics/bundled"
   echo "NOTE: prompt-vault not found at $PROMPT_VAULT_DIR; using bundled prompt" >&2
 fi
+
+# Provenance constants — wrapper-injected into every verdict so results
+# carry the full producer fingerprint without trusting the LLM to know
+# its own model or backend versions. Bump when the underlying contract
+# changes. Keep DNS_MCP_VERSION / DNS_TOOL_VERSION in sync with
+# dns-mcp/pyproject.toml.
+SCHEMA_VERSION="2.0"
+DNS_MCP_VERSION="2.0.0"
+DNS_TOOL_VERSION="0.5.0"
 
 # ── Parse flags ───────────────────────────────────────────────────────────────
 AUTO_APPROVE=false
@@ -342,11 +351,29 @@ MSGEOF
   fi
   cp "$raw_out" "$raw_dest"
 
+  # Provenance plumbing for the heredoc below (quoted PYEOF doesn't
+  # interpolate bash, so pass via env vars).
+  export PROV_SCHEMA_VERSION="$SCHEMA_VERSION"
+  export PROV_PROMPT_VERSION="$PROMPT_VERSION"
+  export PROV_MODEL="$MODEL"
+  export PROV_DNS_MCP_VERSION="$DNS_MCP_VERSION"
+  export PROV_DNS_TOOL_VERSION="$DNS_TOOL_VERSION"
+
   # Extract text + cost metadata from claude JSON wrapper, write output file
   python3 - "$raw_out" "$out_file" "$mode" <<'PYEOF'
-import sys, json, re
+import os, sys, json, re
 
 raw_path, out_path, mode = sys.argv[1], sys.argv[2], sys.argv[3]
+
+# Wrapper-asserted provenance. The wrapper knows these reliably; the LLM
+# doesn't. If the LLM happened to emit any of these keys, ours win.
+PROVENANCE = {
+    "schema_version":   os.environ.get("PROV_SCHEMA_VERSION"),
+    "prompt_version":   os.environ.get("PROV_PROMPT_VERSION"),
+    "model":            os.environ.get("PROV_MODEL"),
+    "dns_mcp_version":  os.environ.get("PROV_DNS_MCP_VERSION"),
+    "dns_tool_version": os.environ.get("PROV_DNS_TOOL_VERSION"),
+}
 
 try:
     wrapper = json.loads(open(raw_path).read())
@@ -404,6 +431,12 @@ else:
         conf = re.search(r'Confidence[:\s]+(High|Medium|Low)', text, re.IGNORECASE)
         if conf:
             data["confidence"] = conf.group(1).capitalize()
+    # Lead the verdict with wrapper-asserted provenance; drop any
+    # LLM-emitted values for the same keys so wrapper truth wins.
+    data = {
+        **PROVENANCE,
+        **{k: v for k, v in data.items() if k not in PROVENANCE},
+    }
     with open(out_path, "w") as f:
         json.dump(data, f, indent=2)
     verdict    = data.get("verdict", "UNKNOWN")
