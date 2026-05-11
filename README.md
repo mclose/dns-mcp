@@ -48,7 +48,7 @@ The `remote` branch (mcp-shim Go bridge) is deprecated.
 
 ## Tools
 
-dns-mcp 2.0.0 currently exposes **16 tools**. Eleven additional tools from the
+dns-mcp 2.0.0 currently exposes **18 tools**. Eleven additional tools from the
 1.x stdio architecture are pending port into `dns_tool` — see
 [Open work](#open-work).
 
@@ -93,9 +93,21 @@ dns-mcp 2.0.0 currently exposes **16 tools**. Eleven additional tools from the
 |------|-------------|
 | `rdap_lookup` | Domain registration data via RDAP (modern WHOIS replacement) |
 
+### Observability
+
+| Tool | Description |
+|------|-------------|
+| `session_stats` | Per-tool call statistics for the current process — count, error_count, mean_ms, max_ms, first/last_called timestamps; plus session uptime and total call count. Module-level state (resets on container restart). Backed by `dns_mcp/tracking.py`. |
+| `reset_stats` | Clear all tool-call statistics and restart the session clock. |
+
+Downstream consumers (e.g. `~/projects/yahoo` batch forensics) call
+`session_stats` as the final tool in each investigation to record which
+DNS tools were consulted; an empty stats dict indicates a "cold read"
+where the analyst LLM produced a verdict without DNS verification.
+
 ## Tool descriptors
 
-All 16 tools use Pydantic `Field` for parameter descriptors. The LLM sees:
+All 18 tools use Pydantic `Field` for parameter descriptors. The LLM sees:
 
 - **Per-parameter descriptions** explaining what the parameter means
 - **`Literal[...]` enums** for record types and protocols (no string-guessing)
