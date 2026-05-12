@@ -14,7 +14,7 @@ dependencies = [
     "httpx[http2]>=0.27",
     "python-jose[cryptography]>=3.3",
     "pydantic-settings>=2.7",
-    "dns-tool @ https://dist.lab.deflationhollow.net/dns_tool-0.7.0.tar.gz",
+    "dns-tool @ https://dist.lab.deflationhollow.net/dns_tool-0.8.0.tar.gz",
 ]
 
 [project.optional-dependencies]

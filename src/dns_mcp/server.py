@@ -59,6 +59,9 @@ from dns_tool.email import (
     enumerate_dkim_selectors as _enumerate_dkim_selectors,
 )
 from dns_tool.intel import (
+    check_ct_logs as _check_ct_logs,
+)
+from dns_tool.intel import (
     check_dbl as _check_dbl,
 )
 from dns_tool.intel import (
@@ -66,6 +69,9 @@ from dns_tool.intel import (
 )
 from dns_tool.intel import (
     check_rbl as _check_rbl,
+)
+from dns_tool.intel import (
+    check_zone_transfer as _check_zone_transfer,
 )
 from dns_tool.intel import (
     cymru_asn as _cymru_asn,
@@ -649,6 +655,53 @@ def create_server() -> FastMCP:
         DNSSEC.
         """
         return await asyncio.to_thread(_detect_hijacking, resolver_ip, DOH_ENDPOINT)
+
+    @app.tool()
+    @track("check_ct_logs")
+    async def check_ct_logs(
+        domain: Domain,
+        include_expired: bool = False,
+    ) -> dict[str, Any]:
+        """Enumerate Certificate Transparency log entries for a domain.
+
+        Queries crt.sh for every certificate logged under <domain> or its
+        subdomains and summarizes: unique subdomains discovered, per-cert
+        issuer/validity/wildcard flags, active vs expired counts. The
+        primary forensic use is **subdomain enumeration** — the SAN lists
+        of every issued cert collectively reveal infrastructure that may
+        not resolve in plain DNS.
+
+        crt.sh is rate-limited and frequently returns HTML error pages or
+        empty bodies for unauthenticated queries; the tool retries 3 times
+        with 0/3/10s backoff and surfaces per-attempt failures in errors[].
+
+        Set include_expired=True to emit expired certs in the certificates
+        list (they're always counted in the summary regardless).
+        """
+        return await asyncio.to_thread(_check_ct_logs, domain, include_expired)
+
+    @app.tool()
+    @track("check_zone_transfer")
+    async def check_zone_transfer(domain: Domain) -> dict[str, Any]:
+        """Attempt AXFR zone transfer against every authoritative NS for <domain>.
+
+        Open zone transfers are a NIST SP 800-81r3 §3.1 violation: any
+        host can enumerate the full zone, exposing hostnames, mail
+        servers, internal structure, and DNSSEC key material to
+        reconnaissance. Transfers should be restricted to authorised
+        secondaries.
+
+        Per-NS state is recorded as `open` / `refused` / `error`. When at
+        least one NS allows the transfer, the first successful transfer's
+        zone summary (SOA serial, name list capped at 200, record type
+        summary, total record count) is preserved in `zone_data` — showing
+        exactly what an attacker would obtain.
+
+        Note: AXFR runs over raw TCP/UDP (no DoH transport exists for zone
+        transfer), so this tool is one of two architectural exceptions to
+        dns_tool's DoH-only stance. NS resolution still uses DoH.
+        """
+        return await asyncio.to_thread(_check_zone_transfer, domain, DOH_ENDPOINT)
 
     # ── Registration / RDAP ───────────────────────────────────────────────
 
