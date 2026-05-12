@@ -19,8 +19,10 @@ src/dns_mcp/
 ```
 
 `server.py.legacy` is the pre-2.0.0 stdio server kept as a reference for
-porting the 11 deferred tools. Do not modify it; new tool work goes in
-`dns_tool` and re-registers a one-line wrapper here.
+porting the remaining deferred tools. Do not modify it; new tool work
+goes in `dns_tool` and re-registers a one-line wrapper here. Migration
+status, phase plan, and per-tool gap analysis live in
+`~/projects/claude-packages/MIGRATION.md`.
 
 ## Build & test
 
@@ -38,13 +40,13 @@ new FastMCP architecture.
 
 ## Adding a tool
 
-1. Implement the function in the appropriate `dns_tool` module
-   (`dns_tool.core`, `dns_tool.email`, `dns_tool.intel`, `dns_tool.rdap`).
-2. Add tests on the library side (`packages/dns_tool/tests/`).
-3. Bump dns_tool version (`make bump-dns_tool V=X.Y.Z` in `claude-packages`)
-   and rebuild the tarball.
-4. Update the URL pin in `pyproject.toml` if the tarball name changed.
-5. Register a wrapper in `src/dns_mcp/server.py`:
+**Full per-port release pipeline:** see
+`~/projects/claude-packages/MIGRATION.md` §6 (single source of truth for
+test → PR → bump → build → deploy → pin → wrap → import-check). Do not
+duplicate the steps here; they have drifted before.
+
+The server-side responsibility is step 9 — register a thin wrapper in
+`src/dns_mcp/server.py`:
 
 ```python
 @app.tool()
@@ -57,7 +59,7 @@ async def check_foo(domain: Domain) -> dict[str, Any]:
     return await asyncio.to_thread(_check_foo, domain, DOH_ENDPOINT)
 ```
 
-Key conventions:
+Key conventions for the wrapper:
 
 - **Type aliases at module top** — `Domain`, `DnsQType`, `IPv4`, `IPAddress`,
   `DkimSelector`, `Port`, `Proto`. Reuse, do not redefine. They carry

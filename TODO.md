@@ -1,6 +1,15 @@
 # TODO
 
-Working backlog. Items are roughly priority-ordered within each section.
+Working backlog for the **dns-mcp server** (auth, wrapper registration,
+transport, MCP-layer concerns). Roughly priority-ordered within each
+section.
+
+**Tool-porting work lives elsewhere.** New `dns_tool` functions and the
+port-from-legacy roadmap are tracked in
+`~/projects/claude-packages/MIGRATION.md` (single source of truth for
+tool status, phase plan, and the per-port release checklist). Items
+below that mention a new tool (`check_*`, `dns_*`, etc.) may be stale
+relative to that doc — check MIGRATION.md first.
 
 ---
 
