@@ -110,6 +110,7 @@ def test_reset_advances_session_start():
     start_before = tracking._session_start
     # Spin briefly to ensure clock advances
     import time
+
     time.sleep(0.001)
     reset_stats()
     assert tracking._session_start > start_before

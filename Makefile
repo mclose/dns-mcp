@@ -1,4 +1,4 @@
-.PHONY: build rebuild lint import-check shell deploy logs status
+.PHONY: build rebuild lint import-check shell deploy logs status test smoke
 
 build:
 	docker build -t dns-mcp:dev .
@@ -32,5 +32,13 @@ logs:
 status:
 	ssh docker-nyc3 'docker compose -f ~/dns-mcp/compose.yaml ps'
 
-# `test` target: dropped during the 2.0.0 rewrite. Will return once
-# tests/ is rewritten against the new FastMCP architecture.
+# Local unit tests. Hits no network — all externalities (JWKS endpoint,
+# Pocket ID admin API, DoH) are mocked.
+test:
+	venv/bin/pytest tests/ -v
+
+# End-to-end curl-based smoke. Doubles as usage documentation; defaults to
+# production. Pass DNS_MCP_TOKEN=<jwt> to exercise the authenticated MCP
+# protocol path (initialize → tools/list → tools/call).
+smoke:
+	scripts/smoke.sh

@@ -28,16 +28,16 @@ dev = [
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+asyncio_mode = "auto"
+
 [tool.ruff]
 line-length = 100
 target-version = "py312"
 # tools/ and *.legacy are pre-2.0.0 code preserved for reference.
 extend-exclude = ["tools", "*.legacy"]
-
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-addopts = "-ra --strict-markers"
-asyncio_mode = "auto"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP"]
