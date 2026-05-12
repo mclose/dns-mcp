@@ -33,6 +33,10 @@ make import-check    # verify create_server() registers all tools
 make test            # pytest tests/ — unit tests, all externalities mocked
 make smoke           # scripts/smoke.sh — curl-based e2e against prod by default
 make shell           # interactive shell inside the container
+
+make bump-dns_tool V=X.Y.Z   # rewrite pin → install → coverage → build → test → import-check → commit
+make verify-prod             # curl /health, confirm prod's dns_tool_version matches the local pin
+make coverage-check          # standalone: every dns_tool tool-shaped function has an @app.tool() wrapper
 ```
 
 Unit tests in `tests/` cover auth (JWKSTokenVerifier), the three OAuth
@@ -51,6 +55,14 @@ run the authenticated MCP path (initialize → tools/list → tools/call).
 `~/projects/claude-packages/MIGRATION.md` §6 (single source of truth for
 test → PR → bump → build → deploy → pin → wrap → import-check). Do not
 duplicate the steps here; they have drifted before.
+
+**Triggered from claude-packages:** `make release-dns_tool V=X.Y.Z` in
+claude-packages runs its bump → build → deploy chain, then automatically
+runs `make bump-dns_tool V=X.Y.Z` here. That target hard-fails (via
+`scripts/check_wrapper_coverage.py`) if dns_tool ships tool-shaped
+functions you haven't wrapped yet — so the workflow surfaces the
+"register a wrapper" step naturally rather than relying on an `@echo
+reminder` you read at the wrong moment.
 
 The server-side responsibility is step 9 — register a thin wrapper in
 `src/dns_mcp/server.py`:
