@@ -14,7 +14,7 @@ dependencies = [
     "httpx[http2]>=0.27",
     "python-jose[cryptography]>=3.3",
     "pydantic-settings>=2.7",
-    "dns-tool @ https://dist.lab.deflationhollow.net/dns_tool-0.6.0.tar.gz",
+    "dns-tool @ https://dist.lab.deflationhollow.net/dns_tool-0.7.0.tar.gz",
 ]
 
 [project.optional-dependencies]
@@ -22,6 +22,7 @@ dev = [
     "ruff>=0.9",
     "pre-commit>=4",
     "pytest>=8",
+    "pytest-asyncio>=0.24",
 ]
 
 [tool.setuptools.packages.find]
@@ -30,10 +31,13 @@ where = ["src"]
 [tool.ruff]
 line-length = 100
 target-version = "py312"
-# Legacy files preserved during the 2.0.0 stdio→Streamable HTTP rewrite
-# Until tests/ is rewritten against the new FastMCP architecture, exclude it
-# from ruff. tools/ and *.legacy are pre-2.0.0 code preserved for reference.
-extend-exclude = ["tests", "tools", "*.legacy"]
+# tools/ and *.legacy are pre-2.0.0 code preserved for reference.
+extend-exclude = ["tools", "*.legacy"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+asyncio_mode = "auto"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP"]
