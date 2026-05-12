@@ -8,15 +8,6 @@ from mcp.server.auth.provider import AccessToken, TokenVerifier
 
 from .config import settings
 
-# Pocket-ID OIDC client UUID for dns-mcp (confirmed 2026-05-12). Treated as
-# this service's identity, not a secret — hardcoding follows the project-
-# guides Pocket-ID integration playbook (Flavor B, resource server).
-_AUDIENCE = "2cff201e-24d4-47b8-bd7c-fe7decb2bf4a"
-# Single-tenant: only Matthew's user UUID is accepted. For multi-tenant the
-# right move is a claim other than sub (e.g. isAdmin or a group lookup).
-_EXPECTED_SUB = "312826c0-2fec-43ee-9c93-2fc383183111"
-_ALGORITHMS = ["RS256", "ES256"]
-
 _jwks_cache: dict[str, Any] | None = None
 _jwks_cache_at: float = 0
 _JWKS_TTL = 3600  # refresh JWKS once per hour
@@ -43,15 +34,7 @@ class JWTAccessToken(AccessToken):
 
 
 class JWKSTokenVerifier(TokenVerifier):
-    """Validates Bearer JWTs against Pocket ID's JWKS endpoint.
-
-    Enforces (per the Pocket-ID integration playbook, Flavor B):
-      - RS256/ES256 signature against the live JWKS
-      - issuer = configured `pocket_id_base_url`
-      - audience = this service's OIDC client UUID (`_AUDIENCE`)
-      - subject = Matthew's user UUID (`_EXPECTED_SUB`, single-tenant)
-      - presence of exp / iat / iss / sub claims
-    """
+    """Validates Bearer JWTs against Pocket ID's JWKS endpoint."""
 
     async def verify_token(self, token: str) -> AccessToken | None:
         try:
@@ -60,20 +43,11 @@ class JWKSTokenVerifier(TokenVerifier):
             claims: dict[str, Any] = jose_jwt.decode(
                 token,
                 jwks,
-                algorithms=_ALGORITHMS,
-                audience=_AUDIENCE,
+                algorithms=["RS256", "ES256"],
                 issuer=expected_issuer,
-                options={
-                    "require_exp": True,
-                    "require_iat": True,
-                    "require_iss": True,
-                    "require_sub": True,
-                },
+                options={"verify_aud": False},
             )
-        except JWTError:
-            return None
-
-        if claims.get("sub") != _EXPECTED_SUB:
+        except (JWTError, Exception):
             return None
 
         scope_str: str = claims.get("scope", "")
