@@ -48,6 +48,9 @@ TEXT_MODE=false
 MODEL=claude-sonnet-4-6
 TRANSPORT=stdio
 SHIM_URL="http://127.0.0.1:58676/mcp"
+DNS_MCP_URL=""
+# Set non-empty externally to skip the inline sandbox_auth fetch.
+BEARER_TOKEN="${BEARER_TOKEN:-}"
 OUT_DIR=""
 POSITIONAL=()
 SKIP_NEXT=false
@@ -59,6 +62,7 @@ for arg in "$@"; do
       -m|--model)     MODEL="$arg" ;;
       --transport)    TRANSPORT="$arg" ;;
       --shim-url)     SHIM_URL="$arg"; TRANSPORT=http ;;
+      --dns-mcp-url)  DNS_MCP_URL="$arg"; TRANSPORT=http ;;
       --out-dir)      OUT_DIR="$arg" ;;
     esac
     continue
@@ -71,6 +75,7 @@ for arg in "$@"; do
     --transport)     PREV_ARG="$arg"; SKIP_NEXT=true ;;
     --transport=*)   TRANSPORT="${arg#--transport=}" ;;
     --shim-url)      PREV_ARG="$arg"; SKIP_NEXT=true ;;
+    --dns-mcp-url)   PREV_ARG="$arg"; SKIP_NEXT=true ;;
     --out-dir)       PREV_ARG="$arg"; SKIP_NEXT=true ;;
     -h|--help)
       echo "Usage: $(basename "$0") [options] <email.txt|->"
@@ -86,7 +91,8 @@ for arg in "$@"; do
       echo "  -y, --yes                Auto-approve dns-mcp tool permissions (skip prompt)"
       echo "  -m, --model MODEL        Claude model (default: claude-sonnet-4-6)"
       echo "  --transport stdio|http   MCP transport (default: stdio — spawns docker per run)"
-      echo "  --shim-url URL           Shim URL for http transport (default: http://127.0.0.1:58676/mcp)"
+      echo "  --dns-mcp-url URL        dns-mcp HTTPS endpoint (Bearer auth via sandbox_auth)"
+      echo "  --shim-url URL           [deprecated] mcp-shim URL — no auth, legacy stdio image"
       echo "  --out-dir DIR            Write output files here (default: current directory)"
       echo "  -h, --help               Show this help"
       echo ""
@@ -131,9 +137,29 @@ if [ "$TRANSPORT" = "stdio" ] && ! docker image inspect dns-mcp >/dev/null 2>&1;
   echo "ERROR: dns-mcp image not found. Run: make build" >&2
   exit 1
 fi
-if [ "$TRANSPORT" = "http" ] && ! curl -sf "${SHIM_URL%/mcp}/health" >/dev/null 2>&1; then
-  echo "ERROR: mcp-shim not reachable at $SHIM_URL (is it running?)" >&2
-  exit 1
+# For http transport: pick the active URL (dns-mcp direct preferred over shim)
+# and verify reachability. dns-mcp's /health is unauthenticated so a plain GET works.
+HTTP_URL=""
+if [ "$TRANSPORT" = "http" ]; then
+  if [ -n "$DNS_MCP_URL" ]; then
+    HTTP_URL="$DNS_MCP_URL"
+  else
+    HTTP_URL="$SHIM_URL"
+  fi
+  if ! curl -sf "${HTTP_URL%/mcp}/health" >/dev/null 2>&1; then
+    echo "ERROR: MCP HTTP endpoint not reachable at $HTTP_URL" >&2
+    exit 1
+  fi
+fi
+
+# Fetch Bearer token only when going direct to dns-mcp (auth-gated).
+if [ -n "$DNS_MCP_URL" ] && [ -z "$BEARER_TOKEN" ]; then
+  BEARER_TOKEN=$(python3 -c "from sandbox_auth import get_token; print(get_token('dns-mcp'))" 2>/dev/null) || {
+    echo "ERROR: could not fetch Bearer token via sandbox_auth.get_token('dns-mcp')" >&2
+    echo "       Pre-seed via 'python -c \"from sandbox_auth import start_device_flow; start_device_flow(\\\"dns-mcp\\\")\"'" >&2
+    echo "       and authenticate at the printed URL, then re-run." >&2
+    exit 1
+  }
 fi
 if [ ! -f "$PROMPT_FILE" ]; then
   echo "ERROR: prompt file not found: $PROMPT_FILE" >&2
@@ -162,8 +188,23 @@ WORK_DIR=$(mktemp -d)
 trap 'rm -rf "$WORK_DIR"' EXIT
 
 # ── MCP config ────────────────────────────────────────────────────────────────
-if [ "$TRANSPORT" = "http" ]; then
-  echo "── Transport: http (shim: $SHIM_URL)"
+if [ "$TRANSPORT" = "http" ] && [ -n "$DNS_MCP_URL" ]; then
+  echo "── Transport: http (dns-mcp direct: $DNS_MCP_URL, Bearer auth)"
+  cat > "$WORK_DIR/mcp.json" <<EOF
+{
+  "mcpServers": {
+    "dns-mcp": {
+      "type": "http",
+      "url": "$DNS_MCP_URL",
+      "headers": {
+        "Authorization": "Bearer $BEARER_TOKEN"
+      }
+    }
+  }
+}
+EOF
+elif [ "$TRANSPORT" = "http" ]; then
+  echo "── Transport: http (shim: $SHIM_URL) — DEPRECATED, prefer --dns-mcp-url"
   cat > "$WORK_DIR/mcp.json" <<EOF
 {
   "mcpServers": {
