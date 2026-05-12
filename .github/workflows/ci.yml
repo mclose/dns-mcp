@@ -24,8 +24,10 @@ jobs:
 
       - name: Import-check (instantiate FastMCP app, list tools)
         # Verifies pyproject deps resolve (incl. dns_tool URL dep), the
-        # package imports, OAuth bootstrap routes register, and all 16
-        # MCP tools are discoverable.
+        # package imports, OAuth bootstrap routes register, and the
+        # expected set of MCP tools is discoverable inside the built image.
+        # Test-level coverage of registration shape lives in the Pytest
+        # job; this is a build-artifact sanity check.
         env:
           POCKET_ID_BASE_URL: https://dummy.example.com
           POCKET_ID_API_KEY: dummy
@@ -42,14 +44,32 @@ jobs:
           app = create_server()
           tools = asyncio.run(app.list_tools())
           assert app.name == 'dns-mcp', f'unexpected app name: {app.name}'
-          assert len(tools) >= 16, f'expected >=16 tools, got {len(tools)}'
+          assert len(tools) >= 20, f'expected >=20 tools, got {len(tools)}'
           print(f'OK: {app.name}, {len(tools)} tools registered')
           "
 
-  # TODO: pytest job. tests/test_tools.py imports the legacy stdio
-  # server.py and calls the tool functions directly. The new architecture
-  # registers tools via @app.tool() decorators on a FastMCP instance, so
-  # tests need to be rewritten to either:
-  #   (a) call tool handler functions through app._tool_manager, or
-  #   (b) hit the running server via httpx + Streamable HTTP transport.
-  # Tracking issue: TODO open one after this PR merges.
+  test:
+    name: Pytest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install package + dev deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e '.[dev]'
+
+      - name: Run pytest
+        env:
+          # Settings dummy values — tests never hit the real Pocket ID;
+          # httpx is monkeypatched in conftest.py. These just satisfy
+          # the required-field validation in Settings.
+          POCKET_ID_BASE_URL: https://dummy.example.com
+          POCKET_ID_API_KEY: dummy
+          SERVER_URL: https://dummy.example.com
+        run: pytest tests/ -v

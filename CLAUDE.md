@@ -30,13 +30,20 @@ status, phase plan, and per-tool gap analysis live in
 make build           # rebuild Docker image
 make lint            # pre-commit run --all-files (ruff check + format)
 make import-check    # verify create_server() registers all tools
+make test            # pytest tests/ — unit tests, all externalities mocked
+make smoke           # scripts/smoke.sh — curl-based e2e against prod by default
 make shell           # interactive shell inside the container
 ```
 
-`tests/` is currently the legacy stdio test suite and is excluded from CI lint
-+ formatting via `pyproject.toml`'s `[tool.ruff] extend-exclude`. Pytest
-target is dropped from the Makefile until the suite is rewritten against the
-new FastMCP architecture.
+Unit tests in `tests/` cover auth (JWKSTokenVerifier), the three OAuth
+bootstrap routes, `create_server()` wiring and Pydantic-schema enforcement,
+config loading, tracking, and prompt registration. No live network — JWKS
+and the Pocket ID admin API are stubbed via httpx monkeypatch.
+
+`scripts/smoke.sh` exercises the live HTTP surface (health, discovery,
+authorize redirect, MCP protocol). Each step prints the curl command, so
+the script doubles as usage documentation. Pass `DNS_MCP_TOKEN=<jwt>` to
+run the authenticated MCP path (initialize → tools/list → tools/call).
 
 ## Adding a tool
 
