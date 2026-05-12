@@ -27,6 +27,9 @@ from urllib.parse import urlencode
 
 import dns_tool
 import httpx
+from dns_tool.cert import (
+    check_caa as _check_caa,
+)
 from dns_tool.core import DOH_ENDPOINT, doh_query, parse_response
 from dns_tool.email import (
     check_dane as _check_dane,
@@ -478,6 +481,27 @@ def create_server() -> FastMCP:
         and digest hex.
         """
         return await asyncio.to_thread(_check_tlsa, host, port, proto, DOH_ENDPOINT)
+
+    @app.tool()
+    @track("check_caa")
+    async def check_caa(domain: Domain) -> dict[str, Any]:
+        """CAA record analysis with CNAME chain + wildcard delegation detection.
+
+        Beyond a plain CAA lookup, this tool surfaces policy gaps a CA would
+        actually act on at issuance time:
+
+        - Tree-climbing (RFC 8659 §3): finds the effective policy when no CAA
+          exists at the queried name.
+        - CNAME chain tracing: follows aliases and flags hops that cross a
+          registrable-domain boundary (third-party CAA control).
+        - Wildcard CNAME detection: a `*.<domain>` CNAME silently delegates
+          CAA authority for unmatched subdomains. Confirmed via a random
+          subdomain probe. Common with ngrok/Cloudflare-Pages style platforms.
+        - Policy summary: issue/issuewild, hard blocks (issue ";"), iodef,
+          RFC 8657 accounturi/validationmethods.
+        - Risk flags at HIGH/MEDIUM/LOW/INFO with an overall_risk rollup.
+        """
+        return await asyncio.to_thread(_check_caa, domain, DOH_ENDPOINT)
 
     # ── Threat intelligence ───────────────────────────────────────────────
 
