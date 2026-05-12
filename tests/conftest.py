@@ -18,12 +18,16 @@ from collections.abc import Iterator
 from typing import Any
 
 # ── Env (set before any dns_mcp import) ──────────────────────────────────
+# Use direct assignment, not setdefault: tests fixtures (signed JWTs,
+# discovery-doc assertions) embed these values literally, so any external
+# env (CI workflow's dummy values, Matthew's .env) would cause silent
+# mismatches if it pre-set them.
 _TEST_POCKET_ID = "https://id.test.example"
 _TEST_SERVER_URL = "https://dns-mcp.test.example"
 
-os.environ.setdefault("POCKET_ID_BASE_URL", _TEST_POCKET_ID)
-os.environ.setdefault("POCKET_ID_API_KEY", "test-api-key")
-os.environ.setdefault("SERVER_URL", _TEST_SERVER_URL)
+os.environ["POCKET_ID_BASE_URL"] = _TEST_POCKET_ID
+os.environ["POCKET_ID_API_KEY"] = "test-api-key"
+os.environ["SERVER_URL"] = _TEST_SERVER_URL
 
 import httpx  # noqa: E402
 import pytest  # noqa: E402

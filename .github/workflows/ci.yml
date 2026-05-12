@@ -65,11 +65,8 @@ jobs:
           pip install -e '.[dev]'
 
       - name: Run pytest
-        env:
-          # Settings dummy values — tests never hit the real Pocket ID;
-          # httpx is monkeypatched in conftest.py. These just satisfy
-          # the required-field validation in Settings.
-          POCKET_ID_BASE_URL: https://dummy.example.com
-          POCKET_ID_API_KEY: dummy
-          SERVER_URL: https://dummy.example.com
+        # No env: tests/conftest.py sets Settings env at module-import,
+        # before any dns_mcp import. Providing the vars here would shadow
+        # the test values and break fixtures that embed them literally
+        # (signed JWT issuer, discovery-doc assertions).
         run: pytest tests/ -v
