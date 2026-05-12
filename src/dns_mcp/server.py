@@ -28,6 +28,9 @@ from urllib.parse import urlencode
 import dns_tool
 import httpx
 from dns_tool.cert import (
+    check_bimi as _check_bimi,
+)
+from dns_tool.cert import (
     check_caa as _check_caa,
 )
 from dns_tool.core import DOH_ENDPOINT, doh_query, parse_response
@@ -39,6 +42,12 @@ from dns_tool.email import (
 )
 from dns_tool.email import (
     check_dmarc as _check_dmarc,
+)
+from dns_tool.email import (
+    check_mta_sts as _check_mta_sts,
+)
+from dns_tool.email import (
+    check_smtp_tlsrpt as _check_smtp_tlsrpt,
 )
 from dns_tool.email import (
     check_spf as _check_spf,
@@ -456,6 +465,42 @@ def create_server() -> FastMCP:
         return await asyncio.to_thread(_enumerate_dkim_selectors, domain, DOH_ENDPOINT)
 
     @app.tool()
+    @track("check_smtp_tlsrpt")
+    async def check_smtp_tlsrpt(domain: Domain) -> dict[str, Any]:
+        """SMTP TLS Reporting (RFC 8460) check for <domain>.
+
+        Queries `_smtp._tls.<domain>` TXT for the TLSRPT record and validates
+        `v=TLSRPTv1` plus `rua=` reporting destinations (each URI must be
+        `mailto:` or `https:`). A record without a `rua=` is useless — there
+        is no destination for aggregate TLS failure reports — and verdicts
+        as `fail`.
+
+        Pairs with `check_mta_sts`: TLSRPT alone reports the failures
+        MTA-STS would have prevented. Returns a contract-conforming envelope
+        with `verdict`/`findings` (RESPONSE_CONTRACT.md).
+        """
+        return await asyncio.to_thread(_check_smtp_tlsrpt, domain, DOH_ENDPOINT)
+
+    @app.tool()
+    @track("check_mta_sts")
+    async def check_mta_sts(domain: Domain, fetch_policy: bool = True) -> dict[str, Any]:
+        """MTA-STS (RFC 8461) DNS + policy file check for <domain>.
+
+        Two-part check: (1) DNS TXT at `_mta-sts.<domain>` for the
+        `v=STSv1; id=...` announcement; (2) HTTPS fetch of the policy file
+        at `https://mta-sts.<domain>/.well-known/mta-sts.txt` (parses
+        `version`, `mode`, `mx`, `max_age`). The two steps are reported
+        separately under `dns_query` and `policy_fetch` so a missing DNS
+        record is distinguishable from a fetchable announcement whose
+        policy file is broken.
+
+        Set `fetch_policy=False` to skip the HTTPS step (DNS-only). SSL
+        verification on the policy fetch is always on — an invalid cert on
+        the policy host is itself a misconfiguration signal.
+        """
+        return await asyncio.to_thread(_check_mta_sts, domain, DOH_ENDPOINT, fetch_policy)
+
+    @app.tool()
     @track("check_dane")
     async def check_dane(domain: Domain) -> dict[str, Any]:
         """Check DANE/SMTP for all MX hosts of <domain>.
@@ -502,6 +547,36 @@ def create_server() -> FastMCP:
         - Risk flags at HIGH/MEDIUM/LOW/INFO with an overall_risk rollup.
         """
         return await asyncio.to_thread(_check_caa, domain, DOH_ENDPOINT)
+
+    @app.tool()
+    @track("check_bimi")
+    async def check_bimi(
+        domain: Domain,
+        selector: str = "default",
+        fetch_vmc: bool = True,
+        check_dmarc_dependency: bool = True,
+    ) -> dict[str, Any]:
+        """BIMI (RFC 9091) record check with DMARC and VMC validation.
+
+        Queries `<selector>._bimi.<domain>` TXT for the BIMI record and
+        parses the `l=` logo URL and `a=` Verified Mark Certificate URL.
+        Default selector is `"default"` per RFC 9091 §3.
+
+        Two cross-cuts beyond a pure record fetch:
+        - **DMARC precondition**: BIMI without DMARC at `p=quarantine` or
+          `p=reject` is decorative — Gmail / Apple Mail gate logo display
+          on DMARC enforcement. Disable with `check_dmarc_dependency=False`.
+        - **VMC reachability**: confirms the VMC URL responds 200 with a
+          plausible cert content type. Does not validate the PKIX chain.
+          Disable with `fetch_vmc=False`.
+
+        Lives in `dns_tool.cert` (alongside CAA) rather than `dns_tool.email`
+        because BIMI authorizes a logo via a certificate; the policy target
+        is the CA/PKI tree.
+        """
+        return await asyncio.to_thread(
+            _check_bimi, domain, DOH_ENDPOINT, selector, fetch_vmc, check_dmarc_dependency
+        )
 
     # ── Threat intelligence ───────────────────────────────────────────────
 
