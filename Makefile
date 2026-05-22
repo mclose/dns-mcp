@@ -66,10 +66,10 @@ coverage-check:
 bump-dns_tool:
 	@test -n "$(V)" || (echo "usage: make bump-dns_tool V=X.Y.Z"; exit 1)
 	@echo "→ Rewriting URL pin to dns_tool-$(V)"
-	sed -i 's|dns_tool-[0-9][^"]*\.tar\.gz|dns_tool-$(V).tar.gz|' pyproject.toml
+	sed -i 's|dns_tool-[0-9][^"]*\.whl|dns_tool-$(V)-py3-none-any.whl|' pyproject.toml
 	@grep "dns-tool @" pyproject.toml
 	@echo "→ Installing dns_tool $(V) into venv"
-	venv/bin/pip install --upgrade "dns-tool @ https://dist.lab.deflationhollow.net/dns_tool-$(V).tar.gz"
+	venv/bin/pip install --upgrade "dns-tool @ https://dist.lab.deflationhollow.net/dns_tool-$(V)-py3-none-any.whl"
 	@echo "→ Wrapper-coverage check"
 	$(MAKE) coverage-check
 	@echo "→ Rebuilding Docker image"
@@ -90,7 +90,7 @@ bump-dns_tool:
 # Post-deploy verification: curl /health, confirm dns_tool_version matches
 # the local pin. Exits non-zero on mismatch so it's safe to chain.
 verify-prod:
-	@PIN=$$(grep -oP 'dns_tool-\K[0-9.]+(?=\.tar\.gz)' pyproject.toml); \
+	@PIN=$$(grep -oP 'dns_tool-\K[0-9.]+(?=-py3-none-any\.whl)' pyproject.toml); \
 	 HEALTH=$$(curl -sf https://dns-mcp.lab.deflationhollow.net/health); \
 	 LIVE_VER=$$(echo "$$HEALTH" | python3 -c "import sys,json; print(json.load(sys.stdin)['dns_tool_version'])"); \
 	 UPTIME=$$(echo "$$HEALTH"   | python3 -c "import sys,json; print(json.load(sys.stdin)['uptime_seconds'])"); \
