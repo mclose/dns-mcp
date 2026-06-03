@@ -1,5 +1,9 @@
 # Spec: `check_ct_logs` tool for dns-mcp
 
+> **Status: implemented.** Tool lives in `dns_tool` (claude-packages) and is
+> wrapped at `src/dns_mcp/server.py:661`. This document is retained as design
+> rationale; the implementation is the source of truth.
+
 ## Overview
 
 Add a `check_ct_logs` tool to dns-mcp that queries Certificate Transparency logs
