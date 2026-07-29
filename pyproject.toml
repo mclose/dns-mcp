@@ -10,11 +10,14 @@ requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.32",
-    "mcp>=1.6.0",
+    # Capped below 2.0.0: mcp 2.x removed `mcp.server.fastmcp` (FastMCP moved
+    # to a new module layout), so server.py's import fails outright. Raising
+    # this cap requires porting the FastMCP import + app construction first.
+    "mcp>=1.6.0,<2",
     "httpx[http2]>=0.27",
     "python-jose[cryptography]>=3.3",
     "pydantic-settings>=2.7",
-    "dns-tool @ https://dist.lab.deflationhollow.net/dns_tool-0.13.1-py3-none-any.whl",
+    "dns-tool @ https://dist.lab.deflationhollow.net/dns_tool-0.13.2-py3-none-any.whl",
 ]
 
 [project.optional-dependencies]
