@@ -7,16 +7,31 @@ name = "dns-mcp"
 version = "2.0.0"
 description = "DNS security MCP server for SOC investigations — Streamable HTTP / OAuth via Pocket ID"
 requires-python = ">=3.12"
+# This is an application, not a library: `make deploy` pushes to `vps`, whose
+# post-receive hook rebuilds the image, and the Dockerfile does a bare
+# `pip install .`. Every deploy therefore re-resolves these constraints from
+# scratch, so an unbounded floor means the deployed image is a function of the
+# calendar rather than of this commit. mcp 2.0.0 proved it: it removed
+# `mcp.server.fastmcp` and a rebuild produced an image whose import failed.
+#
+# Upper bounds below are a stopgap that blocks major-version breaks. They do
+# NOT make builds reproducible, and note fastapi/uvicorn/httpx are 0.x, where
+# minor bumps are allowed to break -- `<1` buys little there. The real fix is a
+# hash-pinned lockfile plus a digest-pinned base image; see TODO.md.
+#
+# Versions in the last known-good production image (dns_tool 0.13.2):
+#   fastapi 0.141.1 · uvicorn 0.52.0 · mcp 1.29.0 · httpx 0.28.1
+#   python-jose 3.5.0 · pydantic-settings 2.14.2 · pydantic 2.13.4
 dependencies = [
-    "fastapi>=0.115",
-    "uvicorn[standard]>=0.32",
-    # Capped below 2.0.0: mcp 2.x removed `mcp.server.fastmcp` (FastMCP moved
-    # to a new module layout), so server.py's import fails outright. Raising
-    # this cap requires porting the FastMCP import + app construction first.
+    "fastapi>=0.115,<1",
+    "uvicorn[standard]>=0.32,<1",
+    # mcp 2.x removed `mcp.server.fastmcp` (FastMCP moved to a new module
+    # layout), so server.py's import fails outright. Raising this cap requires
+    # porting the FastMCP import + app construction first.
     "mcp>=1.6.0,<2",
-    "httpx[http2]>=0.27",
-    "python-jose[cryptography]>=3.3",
-    "pydantic-settings>=2.7",
+    "httpx[http2]>=0.27,<1",
+    "python-jose[cryptography]>=3.3,<4",
+    "pydantic-settings>=2.7,<3",
     "dns-tool @ https://dist.lab.deflationhollow.net/dns_tool-0.13.2-py3-none-any.whl",
 ]
 

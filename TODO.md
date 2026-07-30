@@ -13,6 +13,38 @@ relative to that doc — check MIGRATION.md first.
 
 ---
 
+## Build reproducibility
+
+- [ ] **Hash-pinned lockfile for the image build.** `make deploy` pushes to
+  `vps`, whose post-receive hook rebuilds; the Dockerfile does a bare
+  `pip install --no-cache-dir .`. Every deploy re-resolves dependencies from
+  scratch, so the deployed image reflects *when* you deployed, not what you
+  committed. This already bit once: `mcp>=1.6.0` was unbounded, mcp 2.0.0
+  removed `mcp.server.fastmcp`, and a rebuild produced an image whose import
+  failed — caught only because `make bump-dns_tool` runs `make import-check`.
+  Production was unaffected purely because its image predated the release.
+
+  Upper bounds are now set on every dependency as a stopgap, but they do not
+  make builds reproducible, and `fastapi` / `uvicorn` / `httpx` are 0.x where
+  minor releases may break — `<1` buys little there.
+
+  Fix: generate `requirements.lock` with hashes (`uv pip compile` or
+  `pip-compile`; neither is currently installed on `claude`), have the
+  Dockerfile do `pip install -r requirements.lock` followed by
+  `pip install --no-deps .`, and pin `python:3.12-slim` by digest since that
+  tag also moves. Dependency bumps then become reviewable diffs.
+
+- [ ] **Port to mcp 2.x.** Currently capped `<2`. Deliberately deferred — 2.x
+  relocated `FastMCP` out of `mcp.server.fastmcp`, so this needs the import and
+  app construction in `src/dns_mcp/server.py` rewritten, gated on
+  `make test` + `make import-check` + `scripts/smoke.sh`.
+
+  Trigger for revisiting: mcp 1.x stops receiving security fixes, or a 2.x
+  feature is actually needed. Cost of waiting is that the module layout keeps
+  drifting, so the port gets marginally harder each release.
+
+---
+
 ## Bugs & UX Fixes
 
 - [x] **Expand record type allowlist** — `dns_query`, `dns_dig_style`, `dns_query_dot`,
