@@ -202,3 +202,44 @@ Live zones on `deflationhollow.net` for testing denial-of-existence tools:
 All four zones are DNSSEC-signed with DS records in the parent. Use them as
 primary targets in tests for `nsec_info` (and the deferred port of
 `check_caa`'s NSEC3 logic).
+
+
+## MCP library: `mcp` vs `fastmcp`
+
+Two DIFFERENT PyPI packages with a shared lineage. Getting this wrong is what
+caused the 2026-08-26 outage, so be precise:
+
+- **`mcp`** — the official Model Context Protocol SDK. It *vendored* FastMCP 1.0
+  as `mcp.server.fastmcp`. Latest is **2.1.1**.
+- **`fastmcp`** — the standalone project. FastMCP 1.0 was contributed into the
+  official SDK; the standalone kept going independently. Latest is **3.4.7**
+  (there is NO fastmcp 4).
+
+They are not independent: `fastmcp` DEPENDS ON `mcp`, so mcp's churn still
+reaches you through it — a fastmcp server also has an `mcp` in its venv.
+
+**`mcp` 2.x removed `mcp.server.fastmcp`** (FastMCP renamed to MCPServer). Any
+server importing `from mcp.server.fastmcp import FastMCP` crash-loops on 2.x:
+
+    ModuleNotFoundError: No module named 'mcp.server.fastmcp'
+
+### Cap the major. Always.
+
+2026-08-26 produced three instances of the same failure in one night:
+unpinned `mcp` crash-looped tiny-mcp on its first rebuild in months; unpinned
+`ruff` 0.16 turned ping-lite's CI red on a push that changed nothing relevant;
+unpinned `fastmcp>=2.0` in tgddb silently resolved to 3.4.7. None were caused
+by a code change — all three were latent, waiting for the next rebuild.
+
+An unpinned major does not arrive when you are ready for it. It arrives on the
+next `docker compose build`, which is usually a day you are doing something
+else.
+
+### This repo
+
+Uses the **vendored** SDK: `from mcp.server.fastmcp import FastMCP`. Pinned
+`mcp>=1.6.0,<2` — and this repo had already capped it *before* the 2026-08-26
+incident, which is exactly why it rebuilt cleanly that night while tiny-mcp did
+not. Keep that discipline; it is the reference for the other MCP repos.
+
+**TODO(upgrade):** mcp 2.x is a port (`FastMCP` -> `MCPServer`), not a bump.
