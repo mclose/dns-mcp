@@ -1,5 +1,24 @@
 # DNS MCP Server — Developer Guide
 
+## Auth: CIMD, not a DCR shim (changed 2026-08-26)
+
+Claude.ai and Claude Code present
+`client_id=https://claude.ai/oauth/mcp-oauth-client-metadata`; Pocket ID (>= 2.13)
+fetches that Client ID Metadata Document and materialises the client itself. This
+server therefore:
+
+- points `issuer_url` / `authorization_servers` at **Pocket ID**, not at itself —
+  that single setting decides whose discovery the client reads, and pointing it
+  here is what used to force DCR;
+- serves **no** `/oauth/*` routes and holds **no** `POCKET_ID_API_KEY`;
+- needs its resource registered as an API in Pocket ID with
+  `allowCimdClients: true`.
+
+Anything below describing `/oauth/register`, `/oauth/authorize`, a custom
+`/.well-known/oauth-authorization-server`, or an admin API key is **historical**.
+Current design: `~/projects/project-guides/docs/mcp-server-target-shape.md` §0.
+
+
 FastMCP Streamable HTTP server. OAuth via Pocket ID. Tool implementations are
 thin wrappers around the `dns_tool` library — `dns_tool` owns all DNS logic;
 this server owns auth bootstrap and tool/prompt registration.
