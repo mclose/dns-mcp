@@ -18,6 +18,7 @@ Source layout matches tiny-mcp:
 
 import asyncio
 import json
+import logging
 import time
 import uuid
 from datetime import UTC, datetime
@@ -95,6 +96,8 @@ from .auth import JWKSTokenVerifier, JWTAccessToken
 from .config import settings
 from .tracking import get_stats, track
 from .tracking import reset_stats as _reset_stats_impl
+
+logger = logging.getLogger(__name__)
 
 # ── Tool parameter types ─────────────────────────────────────────────────
 # Defined once and reused across @app.tool() signatures below. Pydantic Field
@@ -312,6 +315,50 @@ def create_server() -> FastMCP:
                 )
             created = create_resp.json()
             client_id: str = created["id"]
+
+            # Grant the new client access to this server's API resource.
+            #
+            # Pocket ID >= 2.10 validates the RFC 8707 `resource` parameter that
+            # Claude.ai sends on /authorize against its `apis` table, and rejects
+            # it with invalid_request unless the *specific* client has been granted
+            # access. 2.5.0 ignored the parameter entirely, which is why this was
+            # not needed before. Since DCR mints a brand-new client on every
+            # reconnect, the grant has to happen here or every reconnect breaks.
+            try:
+                apis_resp = await client.get(f"{pocket_id_url}/api/apis", headers=headers)
+                apis_resp.raise_for_status()
+                wanted = server_url.rstrip("/")
+                api_id = next(
+                    (
+                        a["id"]
+                        for a in apis_resp.json().get("data", [])
+                        if a.get("resource", "").rstrip("/") == wanted
+                    ),
+                    None,
+                )
+                if api_id:
+                    await client.put(
+                        f"{pocket_id_url}/api/apis/{api_id}/clients/{client_id}",
+                        content=json.dumps(
+                            {
+                                "userDelegatedAccess": True,
+                                "clientAccess": False,
+                                "userDelegatedPermissionIds": [],
+                                "clientPermissionIds": [],
+                            }
+                        ),
+                        headers=headers,
+                    )
+                else:
+                    logger.warning(
+                        "no Pocket ID API registered for resource %s; "
+                        "authorization will fail if the client sends resource=",
+                        wanted,
+                    )
+            except Exception:
+                # Registration itself succeeded. Fail loudly in the log but still
+                # return the client to Claude.ai rather than breaking the flow.
+                logger.exception("failed to grant API access for client %s", client_id)
 
         registered_scope = body.get("scope", "openid profile email")
         return JSONResponse(
