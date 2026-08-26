@@ -224,8 +224,25 @@ def create_server() -> FastMCP:
         port=8000,
         token_verifier=JWKSTokenVerifier(),
         auth=AuthSettings(
-            issuer_url=AnyHttpUrl(server_url),
+            # issuer_url drives `authorization_servers` in
+            # /.well-known/oauth-protected-resource — i.e. WHOSE discovery document
+            # the client fetches. Pointing it at Pocket ID means Claude.ai reads
+            # Pocket ID's real discovery (which advertises CIMD and no
+            # registration_endpoint) instead of our DCR shim's metadata route.
+            #
+            # Verified on tiny-mcp 2026-08-26: Claude.ai sends
+            #   client_id=https://claude.ai/oauth/mcp-oauth-client-metadata
+            # and Pocket ID materialises it as a client_type=cimd client. No DCR,
+            # no admin API key, no new client per reconnect.
+            #
+            # Requires, on the Pocket ID side: that URL in `cimdUrlAllowlist`, and
+            # `allowCimdClients: true` on this server's API resource.
+            #
+            # To revert: set back to AnyHttpUrl(server_url); the shim routes below
+            # still work.
+            issuer_url=AnyHttpUrl(pocket_id_url),
             required_scopes=[],
+            # Unchanged — the RESOURCE identifier, not the authorization server.
             resource_server_url=AnyHttpUrl(server_url),
         ),
     )
