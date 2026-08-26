@@ -16,7 +16,6 @@ from tests.conftest import TEST_POCKET_ID, TEST_SERVER_URL
 def _env_with(**overrides) -> dict[str, str]:
     base = {
         "POCKET_ID_BASE_URL": TEST_POCKET_ID,
-        "POCKET_ID_API_KEY": "test-api-key",
         "SERVER_URL": TEST_SERVER_URL,
     }
     base.update({k: str(v) for k, v in overrides.items()})
@@ -30,7 +29,7 @@ def _build(monkeypatch: pytest.MonkeyPatch, env: dict[str, str]) -> Settings:
     state into the test. `_env_file=None` disables file loading for this
     instance only.
     """
-    for k in ("POCKET_ID_BASE_URL", "POCKET_ID_API_KEY", "SERVER_URL"):
+    for k in ("POCKET_ID_BASE_URL", "SERVER_URL"):
         monkeypatch.delenv(k, raising=False)
     for k, v in env.items():
         monkeypatch.setenv(k, v)
@@ -41,20 +40,12 @@ def test_loads_with_all_required_env(monkeypatch: pytest.MonkeyPatch) -> None:
     s = _build(monkeypatch, _env_with())
     assert str(s.pocket_id_base_url).rstrip("/") == TEST_POCKET_ID
     assert str(s.server_url).rstrip("/") == TEST_SERVER_URL
-    assert s.pocket_id_api_key == "test-api-key"
 
 
 def test_missing_pocket_id_url_fails(monkeypatch: pytest.MonkeyPatch) -> None:
     env = _env_with()
     del env["POCKET_ID_BASE_URL"]
     with pytest.raises(ValidationError, match="pocket_id_base_url"):
-        _build(monkeypatch, env)
-
-
-def test_missing_api_key_fails(monkeypatch: pytest.MonkeyPatch) -> None:
-    env = _env_with()
-    del env["POCKET_ID_API_KEY"]
-    with pytest.raises(ValidationError, match="pocket_id_api_key"):
         _build(monkeypatch, env)
 
 
@@ -86,4 +77,4 @@ def test_extras_ignored(monkeypatch: pytest.MonkeyPatch) -> None:
             SOMETHING_NEW="future-key",
         ),
     )
-    assert s.pocket_id_api_key == "test-api-key"
+    assert str(s.pocket_id_base_url).rstrip("/") == TEST_POCKET_ID.rstrip("/")
