@@ -17,17 +17,12 @@ Source layout matches tiny-mcp:
 """
 
 import asyncio
-import json
-import logging
 import time
-import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any, Literal
-from urllib.parse import urlencode
 
 import dns_tool
-import httpx
 from dns_tool.cert import (
     check_bimi as _check_bimi,
 )
@@ -89,15 +84,13 @@ from mcp.server.auth.settings import AuthSettings
 from mcp.server.fastmcp import FastMCP
 from pydantic import AnyHttpUrl, Field
 from starlette.requests import Request
-from starlette.responses import JSONResponse, RedirectResponse, Response
+from starlette.responses import JSONResponse, Response
 
 from . import tracking
 from .auth import JWKSTokenVerifier, JWTAccessToken
 from .config import settings
 from .tracking import get_stats, track
 from .tracking import reset_stats as _reset_stats_impl
-
-logger = logging.getLogger(__name__)
 
 # ── Tool parameter types ─────────────────────────────────────────────────
 # Defined once and reused across @app.tool() signatures below. Pydantic Field
@@ -247,150 +240,15 @@ def create_server() -> FastMCP:
         ),
     )
 
-    # ── OAuth bootstrap routes (no auth required) ─────────────────────────
-    # Generic Pocket-ID DCR shim — lifted verbatim from tiny-mcp/server.py.
-    # If a third server inherits this pattern, factor these four routes into
-    # a shared `mcp_pocket_id_shim` package.
-
-    @app.custom_route("/.well-known/oauth-authorization-server", methods=["GET"])
-    async def oauth_metadata(request: Request) -> Response:
-        return JSONResponse(
-            {
-                "issuer": pocket_id_url,
-                "authorization_endpoint": f"{server_url}/oauth/authorize",
-                "token_endpoint": f"{pocket_id_url}/api/oidc/token",
-                "jwks_uri": f"{pocket_id_url}/.well-known/jwks.json",
-                "registration_endpoint": f"{server_url}/oauth/register",
-                "scopes_supported": ["openid", "profile", "email"],
-                "response_types_supported": ["code"],
-                "grant_types_supported": ["authorization_code", "refresh_token"],
-                "code_challenge_methods_supported": ["S256", "plain"],
-                "token_endpoint_auth_methods_supported": [
-                    "client_secret_basic",
-                    "client_secret_post",
-                    "none",
-                ],
-            }
-        )
-
-    @app.custom_route("/oauth/authorize", methods=["GET"])
-    async def proxy_authorize(request: Request) -> Response:
-        # Claude.ai omits scope from the authorization URL — inject it here
-        # before forwarding to Pocket ID, which rejects requests with no scope.
-        params = dict(request.query_params)
-        if not params.get("scope"):
-            params["scope"] = "openid profile email"
-        return RedirectResponse(
-            url=f"{pocket_id_url}/authorize?{urlencode(params)}",
-            status_code=302,
-        )
-
-    @app.custom_route("/oauth/register", methods=["POST"])
-    async def register_client(request: Request) -> Response:
-        try:
-            body: dict[str, Any] = await request.json()
-        except Exception:
-            return JSONResponse(
-                {"error": "invalid_request", "error_description": "Invalid JSON body"},
-                status_code=400,
-            )
-
-        redirect_uris: list[str] = body.get("redirect_uris", [])
-        if not isinstance(redirect_uris, list):
-            return JSONResponse(
-                {"error": "invalid_request", "error_description": "redirect_uris must be an array"},
-                status_code=400,
-            )
-
-        raw_name: str = body.get("client_name") or f"dcr-{uuid.uuid4().hex[:8]}"
-        client_name = raw_name[:50]  # Pocket ID enforces max=50
-
-        # Public PKCE client — Claude.ai performs the token exchange with
-        # only client_id + code + code_verifier (no client_secret).
-        payload = {
-            "name": client_name,
-            "callbackURLs": redirect_uris,
-            "logoutCallbackURLs": [],
-            "isPublic": True,
-            "pkceEnabled": True,
-        }
-        headers = {
-            "X-API-Key": settings.pocket_id_api_key,
-            "Content-Type": "application/json",
-        }
-
-        async with httpx.AsyncClient(timeout=15) as client:
-            create_resp = await client.post(
-                f"{pocket_id_url}/api/oidc/clients",
-                content=json.dumps(payload),
-                headers=headers,
-            )
-            if create_resp.status_code not in (200, 201):
-                return JSONResponse(
-                    {"error": "server_error", "error_description": "Client creation failed"},
-                    status_code=500,
-                )
-            created = create_resp.json()
-            client_id: str = created["id"]
-
-            # Grant the new client access to this server's API resource.
-            #
-            # Pocket ID >= 2.10 validates the RFC 8707 `resource` parameter that
-            # Claude.ai sends on /authorize against its `apis` table, and rejects
-            # it with invalid_request unless the *specific* client has been granted
-            # access. 2.5.0 ignored the parameter entirely, which is why this was
-            # not needed before. Since DCR mints a brand-new client on every
-            # reconnect, the grant has to happen here or every reconnect breaks.
-            try:
-                apis_resp = await client.get(f"{pocket_id_url}/api/apis", headers=headers)
-                apis_resp.raise_for_status()
-                wanted = server_url.rstrip("/")
-                api_id = next(
-                    (
-                        a["id"]
-                        for a in apis_resp.json().get("data", [])
-                        if a.get("resource", "").rstrip("/") == wanted
-                    ),
-                    None,
-                )
-                if api_id:
-                    await client.put(
-                        f"{pocket_id_url}/api/apis/{api_id}/clients/{client_id}",
-                        content=json.dumps(
-                            {
-                                "userDelegatedAccess": True,
-                                "clientAccess": False,
-                                "userDelegatedPermissionIds": [],
-                                "clientPermissionIds": [],
-                            }
-                        ),
-                        headers=headers,
-                    )
-                else:
-                    logger.warning(
-                        "no Pocket ID API registered for resource %s; "
-                        "authorization will fail if the client sends resource=",
-                        wanted,
-                    )
-            except Exception:
-                # Registration itself succeeded. Fail loudly in the log but still
-                # return the client to Claude.ai rather than breaking the flow.
-                logger.exception("failed to grant API access for client %s", client_id)
-
-        registered_scope = body.get("scope", "openid profile email")
-        return JSONResponse(
-            {
-                "client_id": client_id,
-                "client_id_issued_at": int(time.time()),
-                "redirect_uris": redirect_uris,
-                "client_name": client_name,
-                "grant_types": body.get("grant_types", ["authorization_code"]),
-                "response_types": body.get("response_types", ["code"]),
-                "token_endpoint_auth_method": "none",
-                "scope": registered_scope,
-            },
-            status_code=201,
-        )
+    # The DCR shim that used to live here (/.well-known/oauth-authorization-server,
+    # /oauth/authorize, /oauth/register) was removed 2026-08-26. Claude.ai now reads
+    # Pocket ID's discovery directly (see issuer_url above), presents
+    # client_id=https://claude.ai/oauth/mcp-oauth-client-metadata, and Pocket ID
+    # fetches and materialises that Client ID Metadata Document itself.
+    #
+    # Consequences: no admin API key in this service, no new OIDC client per
+    # reconnect, and no per-client API grant (allowCimdClients on the API covers it).
+    # See project-guides/docs/mcp-server-target-shape.md. Git history has the shim.
 
     @app.custom_route("/health", methods=["GET"])
     async def health(request: Request) -> Response:

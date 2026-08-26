@@ -26,7 +26,6 @@ _TEST_POCKET_ID = "https://id.test.example"
 _TEST_SERVER_URL = "https://dns-mcp.test.example"
 
 os.environ["POCKET_ID_BASE_URL"] = _TEST_POCKET_ID
-os.environ["POCKET_ID_API_KEY"] = "test-api-key"
 os.environ["SERVER_URL"] = _TEST_SERVER_URL
 
 import httpx  # noqa: E402
