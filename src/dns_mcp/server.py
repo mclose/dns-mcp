@@ -185,6 +185,20 @@ DkimSelector = Annotated[
     ),
 ]
 
+# Raw message header block (or a bare DKIM-Signature value). dns_tool caps
+# the same 64 KiB; enforcing it here rejects oversize input at the boundary.
+MailHeaders = Annotated[
+    str,
+    Field(
+        description=(
+            "Raw email headers from a real message (or just a DKIM-Signature "
+            "value). The selector is taken from the DKIM-Signature whose d= "
+            "equals the domain: evidence instead of guessing."
+        ),
+        max_length=65536,
+    ),
+]
+
 # TCP/UDP port number. ge=1 / le=65535 enforces the valid range; 0 is reserved.
 Port = Annotated[
     int,
@@ -368,29 +382,46 @@ def create_server() -> FastMCP:
 
     @app.tool()
     @track("check_dkim")
-    async def check_dkim(domain: Domain, selector: DkimSelector) -> dict[str, Any]:
-        """Retrieve a DKIM public key for <domain> at <selector>.
+    async def check_dkim(
+        domain: Domain,
+        selector: DkimSelector | None = None,
+        headers: MailHeaders | None = None,
+    ) -> dict[str, Any]:
+        """Retrieve and strictly validate a DKIM public key for <domain>.
 
-        Returns key type (RSA / Ed25519), key length in bits for RSA keys
-        (2048+ recommended; 1024 flagged as weak), flags, and the raw record.
+        Give either `selector`, or `headers` from a real message. With
+        headers, the selector comes from the DKIM-Signature whose d= matches
+        the domain (`selector_source: "header"`). Prefer headers whenever
+        you have them: many providers (e.g. ForwardEmail `fe-<hex>`) use
+        selectors that cannot be guessed.
+
+        Returns key type (RSA / Ed25519), exact key bits, flags, the joined
+        record, and `record_strings`. Fails closed: an undecodable key is
+        DKIM_KEY_UNPARSEABLE, bad tag syntax is DKIM_RECORD_MALFORMED, and an
+        empty p= is DKIM_KEY_REVOKED.
         """
-        return await asyncio.to_thread(_check_dkim, domain, selector, DOH_ENDPOINT)
+        return await asyncio.to_thread(_check_dkim, domain, selector, DOH_ENDPOINT, headers=headers)
 
     @app.tool()
     @track("enumerate_dkim_selectors")
-    async def enumerate_dkim_selectors(domain: Domain) -> dict[str, Any]:
-        """Probe a domain for DKIM keys at a list of common selector names.
+    async def enumerate_dkim_selectors(
+        domain: Domain, headers: MailHeaders | None = None
+    ) -> dict[str, Any]:
+        """Find a domain's DKIM keys: header evidence first, guessing last.
 
-        Tries well-known selectors (e.g. 's1', 'google', 'selector1',
-        'k1', 'default', 'mail') against `<sel>._domainkey.<domain>` and
-        returns the ones that resolve to a valid public key, plus the
-        total number of selectors probed.
+        Selectors from `headers` (DKIM-Signature with d=<domain>) are checked
+        first, then well-known names (`dns_tool.email.COMMON_SELECTORS`).
 
-        Use when you don't know which selector a domain uses, or to
-        profile a sender's DKIM key inventory for forensics. The list of
-        selectors probed lives in `dns_tool.email.COMMON_SELECTORS`.
+        A miss is NOT evidence of "no DKIM". DNS cannot list selectors, so
+        when nothing is found the verdict is `undetermined`
+        (DKIM_SELECTOR_NOT_FOUND_IN_PROBE_LIST, info). Never report "this
+        domain has no DKIM" from this tool alone. Ask for a message header
+        instead. A header selector with no published key IS proof of
+        breakage (DKIM_SIGNING_SELECTOR_UNPUBLISHED, high).
         """
-        return await asyncio.to_thread(_enumerate_dkim_selectors, domain, DOH_ENDPOINT)
+        return await asyncio.to_thread(
+            _enumerate_dkim_selectors, domain, DOH_ENDPOINT, headers=headers
+        )
 
     @app.tool()
     @track("check_smtp_tlsrpt")
@@ -431,11 +462,21 @@ def create_server() -> FastMCP:
     @app.tool()
     @track("check_dane")
     async def check_dane(domain: Domain) -> dict[str, Any]:
-        """Check DANE/SMTP for all MX hosts of <domain>.
+        """Check DANE/SMTP publication for all MX hosts of <domain>.
 
         Performs MX lookup, then queries TLSA records at port 25 for each MX
         host. Reports certificate usage, selector, matching type, and digest.
-        DNSSEC AD flag is required for DANE to be trusted.
+
+        DANE protects the domain only if BOTH the TLSA records AND the
+        domain's own MX RRset are DNSSEC-validated (RFC 7672 §2.2.1). An
+        unsigned MX RRset yields DANE_MX_NOT_DNSSEC_VALIDATED. PKIX usages
+        (0/1) are unusable for SMTP.
+
+        This tool does NOT connect to the mail server, so it does not verify
+        that the TLSA records match the certificate the server actually
+        presents. `dane_valid` means "published and DNSSEC-signed", not
+        "delivery will succeed". A stale TLSA after a cert rotation passes
+        here but bounces mail from DANE-validating senders.
         """
         return await asyncio.to_thread(_check_dane, domain, DOH_ENDPOINT)
 
@@ -452,6 +493,9 @@ def create_server() -> FastMCP:
         Returns certificate usage (PKIX-TA / PKIX-EE / DANE-TA / DANE-EE),
         selector (cert / spki), matching type (full / SHA-256 / SHA-512),
         and digest hex.
+
+        DNS only: this tool does NOT connect to <host>, so it does not check
+        that the records match the certificate the server presents.
         """
         return await asyncio.to_thread(_check_tlsa, host, port, proto, DOH_ENDPOINT)
 
