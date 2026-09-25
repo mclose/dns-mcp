@@ -135,12 +135,63 @@ async def test_check_tlsa_proto_enum(app) -> None:
     assert set(proto["enum"]) == {"tcp", "udp"}
 
 
+def _non_null(prop: dict) -> dict:
+    """An Optional[...] field renders as anyOf [<type>, null]; return <type>."""
+    for alt in prop.get("anyOf", [prop]):
+        if alt.get("type") != "null":
+            return alt
+    raise AssertionError(prop)
+
+
 async def test_check_dkim_selector_schema(app) -> None:
     tools = {t.name: t for t in await app.list_tools()}
     schema = tools["check_dkim"].inputSchema
-    sel = schema["properties"]["selector"]
+    sel = _non_null(schema["properties"]["selector"])
     assert sel["maxLength"] == 63
     assert sel["pattern"] == r"^[a-zA-Z0-9_-]+$"
+
+
+async def test_check_dkim_accepts_headers_instead_of_selector(app) -> None:
+    """dns_tool 0.14.0 (#39): selector may come from DKIM-Signature evidence.
+    The wrapper-coverage check can't see new parameters, so pin them here."""
+    tools = {t.name: t for t in await app.list_tools()}
+    schema = tools["check_dkim"].inputSchema
+    assert "headers" in schema["properties"]
+    assert schema["required"] == ["domain"]
+    assert _non_null(schema["properties"]["headers"])["maxLength"] == 65536
+
+
+async def test_enumerate_dkim_selectors_accepts_headers(app) -> None:
+    tools = {t.name: t for t in await app.list_tools()}
+    schema = tools["enumerate_dkim_selectors"].inputSchema
+    assert "headers" in schema["properties"]
+    assert schema["required"] == ["domain"]
+
+
+async def test_dane_descriptions_do_not_overclaim(app) -> None:
+    """#45: descriptions must say DNS publication != live certificate match,
+    and that the MX RRset must be DNSSEC-secure too."""
+    tools = {t.name: t for t in await app.list_tools()}
+    for name in ("check_dane", "check_tlsa"):
+        desc = tools[name].description.lower()
+        assert "does not" in desc and "certificate" in desc, name
+    assert "mx rrset" in tools["check_dane"].description.lower()
+
+
+async def test_check_dkim_headers_extract_selector(app, monkeypatch) -> None:
+    """The headers value reaches dns_tool and drives the selector."""
+    import dns_tool.email as email_mod
+
+    seen = []
+
+    def _txt(name, endpoint):
+        seen.append(name)
+        return ([], True, "NXDOMAIN")
+
+    monkeypatch.setattr(email_mod, "_get_txt", _txt)
+    headers = "DKIM-Signature: v=1; d=example.com; s=fe-abc123; b=x\r\n"
+    await app.call_tool("check_dkim", {"domain": "example.com", "headers": headers})
+    assert seen == ["fe-abc123._domainkey.example.com"]
 
 
 # ── Pydantic enforcement at the MCP boundary ─────────────────────────────

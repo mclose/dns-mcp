@@ -32,7 +32,7 @@ dependencies = [
     "httpx[http2]>=0.27,<1",
     "python-jose[cryptography]>=3.3,<4",
     "pydantic-settings>=2.7,<3",
-    "dns-tool @ https://dist.lab.deflationhollow.net/dns_tool-0.13.2-py3-none-any.whl",
+    "dns-tool @ https://dist.lab.deflationhollow.net/dns_tool-0.14.0-py3-none-any.whl",
 ]
 
 [project.optional-dependencies]
