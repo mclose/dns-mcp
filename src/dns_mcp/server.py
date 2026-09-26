@@ -17,11 +17,13 @@ Source layout matches tiny-mcp:
 """
 
 import asyncio
+import ipaddress
 import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
+import dns.reversename
 import dns_tool
 from dns_tool.cert import (
     check_bimi as _check_bimi,
@@ -215,6 +217,22 @@ Port = Annotated[
 Proto = Literal["tcp", "udp"]
 
 
+def _reverse_name(ip: str) -> str:
+    """Build the in-addr.arpa / ip6.arpa owner name for an IP address.
+
+    Raises ValueError for anything `ipaddress` does not parse as an IPv4 or
+    IPv6 address (the IPAddress pattern is deliberately loose). The result
+    has no trailing dot, matching how names are passed to dns_query.
+    """
+    addr = ipaddress.ip_address(ip.strip())
+    return dns.reversename.from_address(str(addr)).to_text(omit_final_dot=True)
+
+
+async def _dns_query(name: str, qtype: str, dnssec: bool) -> dict[str, Any]:
+    msg = await asyncio.to_thread(doh_query, name, qtype.upper(), DOH_ENDPOINT, dnssec)
+    return parse_response(msg, name, qtype.upper())
+
+
 _START_TIME = time.time()
 # Prompt templates live at the repo root, copied to /app/prompts/ in the
 # container. From src/dns_mcp/server.py: ../../prompts/.
@@ -329,8 +347,30 @@ def create_server() -> FastMCP:
         returned alongside the answer. Returns answer/authority sections,
         AD/CD flags, rcode, and timing.
         """
-        msg = await asyncio.to_thread(doh_query, name, qtype.upper(), DOH_ENDPOINT, dnssec)
-        return parse_response(msg, name, qtype.upper())
+        return await _dns_query(name, qtype, dnssec)
+
+    @app.tool()
+    @track("reverse_dns")
+    async def reverse_dns(
+        ip: IPAddress,
+        dnssec: Annotated[
+            bool,
+            Field(description="Set the DO bit (DNSSEC OK), as for dns_query. Default true."),
+        ] = True,
+    ) -> dict[str, Any]:
+        """Reverse DNS (PTR) lookup for an IPv4 or IPv6 address.
+
+        Builds the reverse name (`4.3.2.1.in-addr.arpa` for IPv4, the
+        nibble-reversed `...ip6.arpa` name for IPv6) and runs a PTR query
+        through the same path as dns_query, returning the same shape
+        (`query.name` shows the reverse name that was asked).
+
+        Use this instead of dns_query with a bare IP: dns_query would look up
+        the literal name (e.g. "8.8.8.8.") and get NXDOMAIN from the root,
+        which looks like "no PTR" but is not. An NXDOMAIN or empty answer
+        here does mean the address has no PTR record.
+        """
+        return await _dns_query(_reverse_name(ip), "PTR", dnssec)
 
     # ── DNSSEC ────────────────────────────────────────────────────────────
 

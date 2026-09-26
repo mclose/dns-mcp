@@ -24,6 +24,7 @@ EXPECTED_TOOLS_MIN = {
     "reset_stats",
     # DNS / DNSSEC
     "dns_query",
+    "reverse_dns",
     "dnssec_validate",
     "nsec_info",
     "detect_hijacking",
