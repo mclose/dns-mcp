@@ -670,16 +670,24 @@ def create_server() -> FastMCP:
     ) -> dict[str, Any]:
         """Enumerate Certificate Transparency log entries for a domain.
 
-        Queries crt.sh for every certificate logged under <domain> or its
-        subdomains and summarizes: unique subdomains discovered, per-cert
-        issuer/validity/wildcard flags, active vs expired counts. The
-        primary forensic use is **subdomain enumeration** — the SAN lists
-        of every issued cert collectively reveal infrastructure that may
-        not resolve in plain DNS.
+        Queries Cert Spotter (primary) and crt.sh (secondary) in parallel for
+        certificates logged under <domain> or its subdomains, merges them, and
+        summarizes: unique subdomains, per-cert issuer/validity/wildcard flags,
+        active vs expired counts. Primary forensic use: **subdomain
+        enumeration** from SAN lists.
 
-        crt.sh is rate-limited and frequently returns HTML error pages or
-        empty bodies for unauthenticated queries; the tool retries 3 times
-        with 0/3/10s backoff and surfaces per-attempt failures in errors[].
+        Reading the result (dns_tool 0.15.0):
+        - `sources[]` records each source's outcome (ok/empty/timeout/
+          rate_limited/http_error...). crt.sh is unreliable; **no negative
+          ever rests on it alone**.
+        - NO_CT_RECORDS (info) means Cert Spotter answered with zero *current*
+          certs — "none found in CT logs", never "no certificate was ever
+          issued" (pre-2018 certs may not be logged at all).
+        - Cert Spotter's free API returns no expired certs; expired history
+          comes only from crt.sh, so an empty expired history is
+          `undetermined` (CT_EXPIRED_HISTORY_UNDETERMINED), not a negative.
+        - CT_NEGATIVE_UNVERIFIED → `undetermined`: Cert Spotter was
+          unavailable, so absence could not be confirmed.
 
         Set include_expired=True to emit expired certs in the certificates
         list (they're always counted in the summary regardless).
