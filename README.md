@@ -63,7 +63,7 @@ dns-mcp 2.0.0 currently exposes **19 tools**. Ten additional tools from the
 
 | Tool | Description |
 |------|-------------|
-| `dns_query` | Standard DNS lookup over DoH — 20 record types (A, AAAA, MX, TXT, NS, SOA, CNAME, PTR, SRV, CAA, DNSKEY, DS, RRSIG, NSEC, NSEC3, TLSA, SSHFP, HTTPS, SVCB, NAPTR) |
+| `dns_query` | Standard DNS lookup over DoH — 20 record types (A, AAAA, MX, TXT, NS, SOA, CNAME, PTR, SRV, CAA, DNSKEY, DS, RRSIG, NSEC, NSEC3, TLSA, SSHFP, HTTPS, SVCB, NAPTR). Optional `subnet` sends an EDNS Client Subnet hint (RFC 7871); the `ecs` block says whether the answer was really tailored to it |
 | `dnssec_validate` | Full DNSSEC chain walk from IANA root trust anchor down to target. Real cryptographic validation at every zone cut. Returns structured `verdict` + per-zone findings + event transcript |
 | `nsec_info` | NSEC / NSEC3 denial-of-existence analysis — zone walkability assessment, NSEC3 hash parameters, opt-out detection |
 

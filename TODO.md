@@ -164,8 +164,10 @@ relative to that doc — check MIGRATION.md first.
   probe alone.
 
 - [ ] **EDNS** — surface EDNS0 metadata in `dns_dig_style` and/or `dns_query`:
-  buffer size, EDNS version, DO (DNSSEC OK) bit, extended RCODE. Optionally add
-  EDNS Client Subnet (ECS, RFC 7871) option support to show/send subnet hints.
+  buffer size, EDNS version, DO (DNSSEC OK) bit, extended RCODE.
+  - [x] EDNS Client Subnet (ECS, RFC 7871): `dns_query(subnet=)` sends the hint
+    and returns an `ecs` block (requested / returned / scope / tailored).
+    dns_tool 0.17.0; needs doh-unbound forwarding ECS (doh `9494f35`, 2026-10-06).
 
 ---
 
