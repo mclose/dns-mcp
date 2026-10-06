@@ -120,6 +120,44 @@ async def test_dns_query_dnssec_default_true(app) -> None:
     assert schema["properties"]["dnssec"]["default"] is True
 
 
+async def test_dns_query_subnet_optional(app) -> None:
+    """dns_tool 0.17.0: ECS hint. The wrapper-coverage check can't see new
+    parameters, so pin it here."""
+    tools = {t.name: t for t in await app.list_tools()}
+    schema = tools["dns_query"].inputSchema
+    assert "subnet" in schema["properties"]
+    assert schema["required"] == ["name"]
+    sub = _non_null(schema["properties"]["subnet"])
+    assert sub["maxLength"] == 49 and "pattern" in sub
+    assert "tailored" in tools["dns_query"].description
+
+
+async def test_dns_query_subnet_reaches_dns_tool(app, monkeypatch) -> None:
+    """subnet is passed through to doh_query and parse_response reports ECS."""
+    import dns.edns
+    import dns.message
+
+    import dns_mcp.server as server_mod
+
+    seen = {}
+
+    def _doh(name, qtype, endpoint, dnssec, subnet=None):
+        seen["subnet"] = subnet
+        r = dns.message.make_response(dns.message.make_query(name, qtype))
+        r.use_edns(0, options=[dns.edns.ECSOption("8.8.8.0", 24, 24)])
+        return r
+
+    monkeypatch.setattr(server_mod, "doh_query", _doh)
+    result = await app.call_tool("dns_query", {"name": "example.com", "subnet": "8.8.8.0/24"})
+    assert seen["subnet"] == "8.8.8.0/24"
+    assert "tailored" in str(result)
+
+
+async def test_dns_query_bad_subnet_rejected_at_boundary(app) -> None:
+    with pytest.raises(ToolError):
+        await app.call_tool("dns_query", {"name": "example.com", "subnet": "8.8.8.0/24; ls"})
+
+
 async def test_check_tlsa_port_range(app) -> None:
     tools = {t.name: t for t in await app.list_tools()}
     schema = tools["check_tlsa"].inputSchema

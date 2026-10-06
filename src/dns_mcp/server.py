@@ -171,6 +171,23 @@ IPAddress = Annotated[
     ),
 ]
 
+# EDNS Client Subnet hint (RFC 7871): an address, optionally /prefix. Loose
+# structural pattern; dns_tool.core.parse_subnet does the real parsing and
+# zeroes host bits. 49 = full IPv6 address + "/128".
+Subnet = Annotated[
+    str | None,
+    Field(
+        description=(
+            "Optional EDNS Client Subnet hint (RFC 7871), like dig +subnet=: resolve "
+            "as if the client were in this subnet, e.g. '8.8.8.0/24' or "
+            "'2001:db8::/48'. Use it to see what a geo/CDN-steered name returns to a "
+            "given network. Omit for a normal query."
+        ),
+        pattern=r"^[0-9a-fA-F:.]+(/[0-9]{1,3})?$",
+        max_length=49,
+    ),
+]
+
 # DKIM selector — the label that prefixes `_domainkey.<domain>`. RFC 6376
 # permits the same character set as DNS labels (alphanumeric + hyphen +
 # underscore in practice). max_length=63 is the DNS label limit.
@@ -228,9 +245,13 @@ def _reverse_name(ip: str) -> str:
     return dns.reversename.from_address(str(addr)).to_text(omit_final_dot=True)
 
 
-async def _dns_query(name: str, qtype: str, dnssec: bool) -> dict[str, Any]:
-    msg = await asyncio.to_thread(doh_query, name, qtype.upper(), DOH_ENDPOINT, dnssec)
-    return parse_response(msg, name, qtype.upper())
+async def _dns_query(
+    name: str, qtype: str, dnssec: bool, subnet: str | None = None
+) -> dict[str, Any]:
+    msg = await asyncio.to_thread(
+        doh_query, name, qtype.upper(), DOH_ENDPOINT, dnssec, subnet=subnet
+    )
+    return parse_response(msg, name, qtype.upper(), subnet=subnet)
 
 
 _START_TIME = time.time()
@@ -338,6 +359,7 @@ def create_server() -> FastMCP:
                 ),
             ),
         ] = True,
+        subnet: Subnet = None,
     ) -> dict[str, Any]:
         """Query the configured DoH resolver for an arbitrary DNS record type.
 
@@ -346,8 +368,15 @@ def create_server() -> FastMCP:
         When dnssec=True (default), sets the DO bit so RRSIG records are
         returned alongside the answer. Returns answer/authority sections,
         AD/CD flags, rcode, and timing.
+
+        With subnet (an EDNS Client Subnet hint), the result adds an `ecs`
+        block. Read it before claiming an answer is what that subnet sees:
+        only `tailored: true` means that (valid for /`scope`). `scope: 0`
+        means the authority gave its default answer (it ignores ECS or
+        answers everyone alike); `returned: null` means the resolver dropped
+        the hint. Neither of those is evidence about the subnet.
         """
-        return await _dns_query(name, qtype, dnssec)
+        return await _dns_query(name, qtype, dnssec, subnet)
 
     @app.tool()
     @track("reverse_dns")
