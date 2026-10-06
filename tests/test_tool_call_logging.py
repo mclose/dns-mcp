@@ -225,13 +225,13 @@ def test_reverse_name_rejects_non_ip(bad) -> None:
 async def test_reverse_dns_tool_queries_ptr_via_dns_query_path(app, tool_log, monkeypatch) -> None:
     seen = []
 
-    def fake_doh(name, qtype, endpoint, dnssec):
+    def fake_doh(name, qtype, endpoint, dnssec, subnet=None):
         seen.append((name, qtype, dnssec))
         return "MSG"
 
     monkeypatch.setattr(server_mod, "doh_query", fake_doh)
     monkeypatch.setattr(
-        server_mod, "parse_response", lambda m, n, q: {"query": {"name": n, "type": q}}
+        server_mod, "parse_response", lambda m, n, q, subnet=None: {"query": {"name": n, "type": q}}
     )
     _, structured = await app.call_tool("reverse_dns", {"ip": "8.8.8.8"})
     assert seen == [("8.8.8.8.in-addr.arpa", "PTR", True)]
