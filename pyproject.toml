@@ -35,7 +35,7 @@ dependencies = [
     # Imported directly by server.py (dns.reversename for reverse_dns); also a
     # dns_tool dependency, so this only makes the direct use explicit + capped.
     "dnspython>=2.6,<3",
-    "dns-tool @ https://dist.lab.deflationhollow.net/dns_tool-0.16.0-py3-none-any.whl",
+    "dns-tool @ https://dist.lab.deflationhollow.net/dns_tool-0.17.0-py3-none-any.whl",
 ]
 
 [project.optional-dependencies]
