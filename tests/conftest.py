@@ -105,10 +105,16 @@ def sign_jwt(
     *,
     sub: str = "user-123",
     issuer: str = TEST_POCKET_ID,
+    audience: Any = (TEST_SERVER_URL,),
     extra: dict[str, Any] | None = None,
     expires_in: int = 3600,
 ) -> str:
-    """Sign a JWT with the test keypair. Helper, not a fixture — call from tests."""
+    """Sign a JWT with the test keypair. Helper, not a fixture — call from tests.
+
+    ``aud`` defaults to ``[TEST_SERVER_URL]``: Pocket ID stamps the RFC 8707
+    resource (trailing slash trimmed) as a one-element array. Pass
+    ``audience=None`` to omit the claim entirely.
+    """
     now = int(time.time())
     claims: dict[str, Any] = {
         "iss": issuer,
@@ -117,6 +123,8 @@ def sign_jwt(
         "exp": now + expires_in,
         "scope": "openid profile email",
     }
+    if audience is not None:
+        claims["aud"] = list(audience) if isinstance(audience, (list, tuple)) else audience
     if extra:
         claims.update(extra)
     return jose_jwt.encode(

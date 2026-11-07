@@ -27,6 +27,18 @@ async def _fetch_jwks() -> dict[str, Any]:
         return _jwks_cache
 
 
+def expected_audience() -> str:
+    """The `aud` a token must carry to be accepted here: our own resource URI.
+
+    Claude sends RFC 8707 `resource=<server_url>`; Pocket ID validates it against
+    the registered API and stamps it into `aud` with any trailing slash trimmed
+    (`resolveResource`, verified on 2.14.0 and 2.19.2). pydantic's AnyHttpUrl adds
+    a trailing slash to a bare origin, so strip it to match. Pinning this stops a
+    token minted for another MCP server on the same IdP being replayed here.
+    """
+    return str(settings.server_url).rstrip("/")
+
+
 class JWTAccessToken(AccessToken):
     """AccessToken extended with the full decoded JWT claims."""
 
@@ -45,7 +57,8 @@ class JWKSTokenVerifier(TokenVerifier):
                 jwks,
                 algorithms=["RS256", "ES256"],
                 issuer=expected_issuer,
-                options={"verify_aud": False},
+                audience=expected_audience(),
+                options={"require_aud": True, "require_exp": True, "require_sub": True},
             )
         except (JWTError, Exception):
             return None

@@ -12,7 +12,7 @@ import time
 import pytest
 
 from dns_mcp.auth import JWKSTokenVerifier, JWTAccessToken
-from tests.conftest import TEST_POCKET_ID, sign_jwt
+from tests.conftest import TEST_POCKET_ID, TEST_SERVER_URL, sign_jwt
 
 
 @pytest.mark.asyncio
@@ -147,3 +147,50 @@ async def test_expires_at_propagated(patch_jwks_endpoint, reset_jwks_cache, rsa_
     assert result is not None
     assert result.expires_at is not None
     assert before + 1230 <= result.expires_at <= after + 1240
+
+
+# ── Audience pinning (RFC 8707) ──────────────────────────────────────────
+# Pocket ID stamps the requested resource into `aud`. A token minted for a
+# sibling MCP server on the same IdP must not be accepted here.
+
+
+@pytest.mark.asyncio
+async def test_token_for_other_resource_rejected(
+    patch_jwks_endpoint, reset_jwks_cache, rsa_keypair
+):
+    token = sign_jwt(rsa_keypair, audience=["https://tiny-mcp.test.example"])
+    assert await JWKSTokenVerifier().verify_token(token) is None
+
+
+@pytest.mark.asyncio
+async def test_token_without_aud_rejected(patch_jwks_endpoint, reset_jwks_cache, rsa_keypair):
+    token = sign_jwt(rsa_keypair, audience=None)
+    assert await JWKSTokenVerifier().verify_token(token) is None
+
+
+@pytest.mark.asyncio
+async def test_plain_login_token_rejected(patch_jwks_endpoint, reset_jwks_cache, rsa_keypair):
+    """A no-resource token has aud=[client_id, issuer] -- not ours."""
+    token = sign_jwt(rsa_keypair, audience=["some-client-uuid", TEST_POCKET_ID])
+    assert await JWKSTokenVerifier().verify_token(token) is None
+
+
+@pytest.mark.asyncio
+async def test_aud_as_bare_string_accepted(patch_jwks_endpoint, reset_jwks_cache, rsa_keypair):
+    token = sign_jwt(rsa_keypair, audience=TEST_SERVER_URL)
+    assert await JWKSTokenVerifier().verify_token(token) is not None
+
+
+@pytest.mark.asyncio
+async def test_aud_list_containing_ours_accepted(
+    patch_jwks_endpoint, reset_jwks_cache, rsa_keypair
+):
+    token = sign_jwt(rsa_keypair, audience=[TEST_SERVER_URL, TEST_POCKET_ID])
+    assert await JWKSTokenVerifier().verify_token(token) is not None
+
+
+def test_expected_audience_strips_trailing_slash():
+    from dns_mcp.auth import expected_audience
+
+    assert expected_audience() == TEST_SERVER_URL
+    assert not expected_audience().endswith("/")
