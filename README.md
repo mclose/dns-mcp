@@ -99,7 +99,6 @@ dns-mcp 2.0.0 currently exposes **19 tools**. Ten additional tools from the
 | Tool | Description |
 |------|-------------|
 | `session_stats` | Per-tool call statistics for the current process — count, error_count, mean_ms, max_ms, first/last_called timestamps; plus session uptime and total call count. Module-level state (resets on container restart). Backed by `dns_mcp/tracking.py`. |
-| `reset_stats` | Clear all tool-call statistics and restart the session clock. |
 
 Downstream consumers (e.g. `~/projects/yahoo` batch forensics) call
 `session_stats` as the final tool in each investigation to record which
@@ -228,7 +227,7 @@ dns-mcp/
 │   ├── config.py              # pydantic-settings Settings (required URLs, ALLOWED_SUBS)
 │   ├── auth.py                # fastmcp JWTVerifier + fail-closed sub allowlist
 │   ├── tracking.py            # per-call JSON log lines + session stats
-│   └── server.py              # fastmcp app: 26 tools + 4 prompts + /health
+│   └── server.py              # fastmcp app: 25 tools + 4 prompts + /health
 ├── prompts/                   # MCP analyst prompt text files
 ├── tests/                     # pytest (auth, schema, annotations, tracking, prompts)
 ├── tools/                     # operator scripts (smoke tests, deploy helpers)

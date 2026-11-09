@@ -21,7 +21,6 @@ EXPECTED_TOOLS_MIN = {
     "ping",
     "whoami",
     "session_stats",
-    "reset_stats",
     # DNS / DNSSEC
     "dns_query",
     "reverse_dns",
@@ -329,24 +328,18 @@ async def test_prompt_returns_file_body(app) -> None:
 
 async def test_every_tool_has_title_and_honest_hints(app) -> None:
     tools = await app.list_tools()
-    assert len(tools) == 26
+    assert len(tools) == 25
     for t in tools:
         a = t.annotations
         assert t.title and a is not None, t.name
-        if t.name == "reset_stats":
-            # The one tool that changes state (clears this server's counters).
-            assert a.read_only_hint is False and a.destructive_hint is True
-        else:
-            assert a.read_only_hint is True and a.destructive_hint is False, t.name
-        assert a.open_world_hint is (
-            t.name not in {"ping", "whoami", "session_stats", "reset_stats"}
-        )
+        assert a.read_only_hint is True and a.destructive_hint is False, t.name
+        assert a.open_world_hint is (t.name not in {"ping", "whoami", "session_stats"})
 
 
 def test_instructions_name_the_tool_families() -> None:
     from dns_mcp.server import INSTRUCTIONS
 
-    for word in ("check_dmarc", "check_zone_transfer", "reset_stats"):
+    for word in ("check_dmarc", "check_zone_transfer"):
         assert word in INSTRUCTIONS
 
 

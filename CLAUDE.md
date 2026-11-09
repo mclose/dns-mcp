@@ -19,8 +19,8 @@ with mcp-ping-lite as the reference implementation:
 - **uv** + committed `uv.lock`, floors only; digest-pinned base/uv images;
   Dependabot. `make bump-dns_tool` re-locks (`uv lock --upgrade-package dns-tool`).
 - Every tool: `title` + `readOnlyHint`/`destructiveHint`/`openWorldHint`.
-  `reset_stats` is the one tool marked not-read-only/destructive (it clears this
-  server's own counters), so Claude.ai always asks before calling it.
+  All 25 tools are read-only (`reset_stats` was removed 2026-11-09; stats reset
+  on container restart).
 - Result size: Claude.ai rejects results over ~150k chars. `check_ct_logs`
   caps `certificates` (google.com was 285k) and links to crt.sh; other tools
   measured well under (largest dnssec_validate ~11k).
@@ -51,7 +51,7 @@ src/dns_mcp/
 ├── config.py       # pydantic-settings Settings (required URLs, ALLOWED_SUBS)
 ├── auth.py         # fastmcp JWTVerifier + fail-closed sub allowlist
 ├── tracking.py     # per-call JSON log lines + session stats
-└── server.py       # fastmcp app: 26 tools + 4 prompts + /health
+└── server.py       # fastmcp app: 25 tools + 4 prompts + /health
 ```
 
 `server.py.legacy` is the pre-2.0.0 stdio server kept as a reference for
@@ -194,7 +194,7 @@ These run without confirmation (saved in `~/.claude/settings.json`):
 - `ruff` runs on every commit (pre-commit hook) — auto-formats staged Python
   files. Stage the result and commit again if it fires.
 - CI (uv, SHA-pinned actions): ruff, pytest, wrapper coverage, and an image
-  build + import-check that lists exactly 26 tools through a fastmcp Client.
+  build + import-check that lists exactly 25 tools through a fastmcp Client.
 - Snyk runs on every PR for vulnerability scanning.
 - Security-first: no `eval`, `exec`, `os.system`, or `shell=True`.
 - Input validation via Pydantic `Field` constraints at the MCP boundary.

@@ -74,15 +74,20 @@ def _subject(kwargs: dict) -> str | None:
 def _session_id() -> str | None:
     """MCP session id of the in-flight request, if any.
 
-    Read from the `mcp-session-id` header of the HTTP request that carried
-    the CallToolRequest — the same id as the transport's "Created new
-    transport with session ID" line. None outside a request (unit tests,
-    stdio).
+    Read from the `mcp-session-id` header. Only handshake-era clients send
+    one: under MCP protocol 2026-07-28 every request is its own connection
+    and there is no session, so this is None (see `protocol` on the same
+    line). Context.session_id is not a substitute there; it is a fresh
+    random id per request. None outside a request (unit tests, stdio).
     """
+    return _header("mcp-session-id")
+
+
+def _header(name: str) -> str | None:
     try:
         from fastmcp.server.dependencies import get_http_request
 
-        return get_http_request().headers.get("mcp-session-id")
+        return get_http_request().headers.get(name)
     except Exception:  # RuntimeError outside a request; never fail a call over logging
         return None
 
@@ -113,6 +118,7 @@ def _emit(
         "duration_ms": round(duration_ms, 1),
         "outcome": "exception" if exc is not None else "ok",
         "session_id": _session_id(),
+        "protocol": _header("mcp-protocol-version"),
         "sub": _sub(),
     }
     if exc is None:
