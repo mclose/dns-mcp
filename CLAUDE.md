@@ -1,23 +1,39 @@
 # DNS MCP Server — Developer Guide
 
-## Auth: CIMD, not a DCR shim (changed 2026-08-26)
+## Standard (2026-11, dns-mcp #14)
 
-Claude.ai and Claude Code present
-`client_id=https://claude.ai/oauth/mcp-oauth-client-metadata`; Pocket ID (>= 2.13)
-fetches that Client ID Metadata Document and materialises the client itself. This
-server therefore:
+This server follows `~/projects/project-guides/docs/mcp-server-target-shape.md`,
+with mcp-ping-lite as the reference implementation:
 
-- points `issuer_url` / `authorization_servers` at **Pocket ID**, not at itself —
-  that single setting decides whose discovery the client reads, and pointing it
-  here is what used to force DCR;
-- serves **no** `/oauth/*` routes and holds **no** `POCKET_ID_API_KEY`;
-- needs its resource registered as an API in Pocket ID with
-  `allowCimdClients: true`.
-
-Anything below describing `/oauth/register`, `/oauth/authorize`, a custom
-`/.well-known/oauth-authorization-server`, or an admin API key is **historical**.
-Current design: `~/projects/project-guides/docs/mcp-server-target-shape.md` §0.
-
+- **Standalone `fastmcp` >= 4.1.6** on `mcp` 2.x. The vendored
+  `mcp.server.fastmcp` (capped `<2`) and the hand-rolled python-jose JWKS
+  verifier are gone.
+- **Auth, three layers, all fail closed:** the shared Claude CIMD client is
+  restricted to Pocket ID group `mcp_users`; `aud` must equal
+  `https://dns-mcp.lab.deflationhollow.net/mcp`; `ALLOWED_SUBS` (Pocket ID user
+  ids) is a per-server allowlist where empty = nobody. Missing
+  `POCKET_ID_BASE_URL`/`SERVER_URL` stops the process at startup.
+- **Resource = `<SERVER_URL>/mcp`** (was the bare origin until this port).
+  Metadata at `/.well-known/oauth-protected-resource/mcp`; the Pocket ID API is
+  registered under that URI; cowmon pins it. Move all three together.
+- **uv** + committed `uv.lock`, floors only; digest-pinned base/uv images;
+  Dependabot. `make bump-dns_tool` re-locks (`uv lock --upgrade-package dns-tool`).
+- Every tool: `title` + `readOnlyHint`/`destructiveHint`/`openWorldHint`.
+  `reset_stats` is the one tool marked not-read-only/destructive (it clears this
+  server's own counters), so Claude.ai always asks before calling it.
+- Result size: Claude.ai rejects results over ~150k chars. `check_ct_logs`
+  caps `certificates` (google.com was 285k) and links to crt.sh; other tools
+  measured well under (largest dnssec_validate ~11k).
+- SSRF: `detect_hijacking` takes public resolver IPs only. MTA-STS/BIMI fetches
+  in dns_tool are HTTPS with `verify=True` and no redirects, so an internal
+  target can't present a valid cert. AXFR (`check_zone_transfer`) follows the
+  zone's NS records inside dns_tool on port 53 only — low risk, tracked there.
+- **`check_zone_transfer` run from claude reports deflationhollow.net AXFR
+  "open":** claude reaches the nameservers over WireGuard, which is in BIND's
+  `allow-transfer` ACL. From the public internet (docker-nyc3, caddy-nyc3, and so
+  the production connector) all three NS refuse. Judge exposure from docker-nyc3.
+- Every call logs one JSON line (`tracking.py`): tool, subject, duration,
+  outcome, verdict, session id and the caller's `sub`.
 
 FastMCP Streamable HTTP server. OAuth via Pocket ID. Tool implementations are
 thin wrappers around the `dns_tool` library — `dns_tool` owns all DNS logic;
@@ -32,9 +48,10 @@ codebase.
 src/dns_mcp/
 ├── __init__.py
 ├── __main__.py     # entrypoint — `python -m dns_mcp`
-├── config.py       # pydantic-settings Settings class
-├── auth.py         # JWKSTokenVerifier (validates JWTs from Pocket ID JWKS)
-└── server.py       # FastMCP app: OAuth routes + 16 tools + 4 prompts
+├── config.py       # pydantic-settings Settings (required URLs, ALLOWED_SUBS)
+├── auth.py         # fastmcp JWTVerifier + fail-closed sub allowlist
+├── tracking.py     # per-call JSON log lines + session stats
+└── server.py       # fastmcp app: 26 tools + 4 prompts + /health
 ```
 
 `server.py.legacy` is the pre-2.0.0 stdio server kept as a reference for
@@ -46,8 +63,11 @@ status, phase plan, and per-tool gap analysis live in
 ## Build & test
 
 ```bash
+make install         # uv sync --locked → .venv
+make check           # ruff + format check + pytest + wrapper coverage (git hook runs this)
+make upgrade         # uv lock --upgrade, then check — the only way versions move
 make build           # rebuild Docker image
-make lint            # pre-commit run --all-files (ruff check + format)
+make lint            # ruff check + format check
 make import-check    # verify create_server() registers all tools
 make test            # pytest tests/ — unit tests, all externalities mocked
 make smoke           # scripts/smoke.sh — curl-based e2e against prod by default
@@ -58,10 +78,12 @@ make verify-prod             # curl /health, confirm prod's dns_tool_version mat
 make coverage-check          # standalone: every dns_tool tool-shaped function has an @app.tool() wrapper
 ```
 
-Unit tests in `tests/` cover auth (JWKSTokenVerifier), the three OAuth
-bootstrap routes, `create_server()` wiring and Pydantic-schema enforcement,
-config loading, tracking, and prompt registration. No live network — JWKS
-and the Pocket ID admin API are stubbed via httpx monkeypatch.
+Unit tests in `tests/` cover auth (audience incl. the old bare-origin resource,
+issuer, expiry, forgery, allowlist, metadata, 401), `/health`, schema
+enforcement, annotations, the CT result cap, the resolver guard, tracking and
+prompts. Server tests go through fastmcp's in-memory `Client` (`ClientApp` in
+conftest), so they see what an MCP client sees. No live network; tokens are
+signed locally.
 
 `scripts/smoke.sh` exercises the live HTTP surface (health, discovery,
 authorize redirect, MCP protocol). Each step prints the curl command, so
@@ -144,18 +166,13 @@ Why `str` and not Pydantic IP types: `dns_tool` functions take strings.
 `str()` at the call site. Patterns + `str` is clearer and matches what the
 library wants.
 
-## OAuth bootstrap
+## Auth
 
-Three custom routes mounted by FastMCP, lifted verbatim from tiny-mcp:
-
-| Route | Purpose |
-|-------|---------|
-| `GET /.well-known/oauth-authorization-server` | Discovery doc — issuer is Pocket ID, authorization & registration endpoints proxy through us, token & jwks endpoints point straight at Pocket ID |
-| `GET /oauth/authorize` | Inject `scope=openid profile email` if Claude.ai omits it, then 302 to Pocket ID |
-| `POST /oauth/register` | Dynamic Client Registration — creates a new OIDC client on Pocket ID via admin API, returns DCR-shaped response to the MCP client |
-
-`POST /mcp` (the tool endpoint) is auth-gated: bearer JWT verified against
-Pocket ID JWKS by `JWKSTokenVerifier` before any `@app.tool()` handler runs.
+`auth.build_auth()`: fastmcp `JWTVerifier` (Pocket ID JWKS, issuer, `aud` =
+`<SERVER_URL>/mcp`, RS256) wrapped by `AllowlistJWTVerifier` for `ALLOWED_SUBS`,
+inside a `RemoteAuthProvider` whose `authorization_servers` is Pocket ID — so
+clients read Pocket ID's discovery and use CIMD. No `/oauth/*` routes, no admin
+key. `/health` is the only unauthenticated route.
 
 ## Allowed commands
 
@@ -176,8 +193,8 @@ These run without confirmation (saved in `~/.claude/settings.json`):
 
 - `ruff` runs on every commit (pre-commit hook) — auto-formats staged Python
   files. Stage the result and commit again if it fires.
-- CI runs `pre-commit run --all-files` (lint job) plus a build + import-check
-  job that instantiates `create_server()` and asserts ≥16 tools register.
+- CI (uv, SHA-pinned actions): ruff, pytest, wrapper coverage, and an image
+  build + import-check that lists exactly 26 tools through a fastmcp Client.
 - Snyk runs on every PR for vulnerability scanning.
 - Security-first: no `eval`, `exec`, `os.system`, or `shell=True`.
 - Input validation via Pydantic `Field` constraints at the MCP boundary.
@@ -221,44 +238,3 @@ Live zones on `deflationhollow.net` for testing denial-of-existence tools:
 All four zones are DNSSEC-signed with DS records in the parent. Use them as
 primary targets in tests for `nsec_info` (and the deferred port of
 `check_caa`'s NSEC3 logic).
-
-
-## MCP library: `mcp` vs `fastmcp`
-
-Two DIFFERENT PyPI packages with a shared lineage. Getting this wrong is what
-caused the 2026-08-26 outage, so be precise:
-
-- **`mcp`** — the official Model Context Protocol SDK. It *vendored* FastMCP 1.0
-  as `mcp.server.fastmcp`. Latest is **2.1.1**.
-- **`fastmcp`** — the standalone project. FastMCP 1.0 was contributed into the
-  official SDK; the standalone kept going independently. Latest is **3.4.7**
-  (there is NO fastmcp 4).
-
-They are not independent: `fastmcp` DEPENDS ON `mcp`, so mcp's churn still
-reaches you through it — a fastmcp server also has an `mcp` in its venv.
-
-**`mcp` 2.x removed `mcp.server.fastmcp`** (FastMCP renamed to MCPServer). Any
-server importing `from mcp.server.fastmcp import FastMCP` crash-loops on 2.x:
-
-    ModuleNotFoundError: No module named 'mcp.server.fastmcp'
-
-### Cap the major. Always.
-
-2026-08-26 produced three instances of the same failure in one night:
-unpinned `mcp` crash-looped tiny-mcp on its first rebuild in months; unpinned
-`ruff` 0.16 turned ping-lite's CI red on a push that changed nothing relevant;
-unpinned `fastmcp>=2.0` in tgddb silently resolved to 3.4.7. None were caused
-by a code change — all three were latent, waiting for the next rebuild.
-
-An unpinned major does not arrive when you are ready for it. It arrives on the
-next `docker compose build`, which is usually a day you are doing something
-else.
-
-### This repo
-
-Uses the **vendored** SDK: `from mcp.server.fastmcp import FastMCP`. Pinned
-`mcp>=1.6.0,<2` — and this repo had already capped it *before* the 2026-08-26
-incident, which is exactly why it rebuilt cleanly that night while tiny-mcp did
-not. Keep that discipline; it is the reference for the other MCP repos.
-
-**TODO(upgrade):** mcp 2.x is a port (`FastMCP` -> `MCPServer`), not a bump.

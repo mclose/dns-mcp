@@ -1,11 +1,21 @@
+# Tools run from .venv (repo: local), so hook, `make check` and CI share one
+# ruff and one pytest (project-guides META-CLAUDE P16).
 repos:
-  - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.15.4
+  - repo: local
     hooks:
       - id: ruff
-        args: [--fix]
+        name: ruff check
+        entry: .venv/bin/ruff check
+        language: system
+        types: [python]
       - id: ruff-format
-
-# Local hooks for pytest and stdio-e2e were dropped in the 2.0.0
-# Streamable HTTP rewrite. Pytest will be re-added once tests/ is
-# rewritten against the new architecture.
+        name: ruff format --check
+        entry: .venv/bin/ruff format --check
+        language: system
+        types: [python]
+      - id: pytest
+        name: pytest
+        entry: .venv/bin/pytest -q
+        language: system
+        pass_filenames: false
+        always_run: true

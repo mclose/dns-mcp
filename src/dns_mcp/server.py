@@ -1,23 +1,20 @@
 """dns-mcp — DNS security MCP server for SOC investigations.
 
-Streamable HTTP / OAuth-protected via Pocket ID. Tool implementations are thin
-wrappers around `dns_tool`; this module owns auth bootstrap and tool/prompt
-registration. `dns_tool` owns all DNS logic.
+Streamable HTTP on standalone fastmcp 4, authenticated by Pocket ID via CIMD.
+Tool implementations are thin wrappers around `dns_tool`; this module owns tool
+and prompt registration. `dns_tool` owns all DNS logic.
 
-OAuth bootstrap routes (`/.well-known/oauth-authorization-server`,
-`/oauth/authorize`, `/oauth/register`) are lifted verbatim from tiny-mcp —
-they are generic Pocket-ID DCR shim plumbing, not dns-mcp-specific.
-
-Source layout matches tiny-mcp:
+Source layout (matches tiny-mcp):
   src/dns_mcp/
-  ├── __main__.py     entrypoint — create_server().run(transport="streamable-http")
-  ├── config.py       pydantic-settings Settings class
-  ├── auth.py         JWKSTokenVerifier + JWTAccessToken
-  └── server.py       (this file) FastMCP app — OAuth routes + tools + prompts
+  ├── __main__.py     entrypoint — create_server(settings).run(transport="http")
+  ├── config.py       pydantic-settings Settings (required URLs, ALLOWED_SUBS)
+  ├── auth.py         fastmcp JWTVerifier + fail-closed sub allowlist
+  └── server.py       (this file) tools + prompts + /health
 """
 
 import asyncio
 import ipaddress
+import json
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -81,16 +78,16 @@ from dns_tool.intel import (
     nsec_info as _nsec_info,
 )
 from dns_tool.rdap import rdap_lookup as _rdap_lookup
-from mcp.server.auth.middleware.auth_context import get_access_token
-from mcp.server.auth.settings import AuthSettings
-from mcp.server.fastmcp import FastMCP
-from pydantic import AnyHttpUrl, Field
+from fastmcp import FastMCP
+from fastmcp.server.dependencies import get_access_token
+from mcp.types import ToolAnnotations
+from pydantic import AfterValidator, Field
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
 from . import tracking
-from .auth import JWKSTokenVerifier, JWTAccessToken
-from .config import settings
+from .auth import build_auth
+from .config import Settings, settings
 from .tracking import get_stats, track
 from .tracking import reset_stats as _reset_stats_impl
 
@@ -158,6 +155,21 @@ IPv4 = Annotated[
         max_length=15,
     ),
 ]
+
+
+def _require_public_ip(value: str) -> str:
+    """Reject non-global addresses: from a cloud container, a private, loopback,
+    link-local or reserved resolver can only be our own internal network."""
+    try:
+        addr = ipaddress.ip_address(value)
+    except ValueError:
+        raise ValueError(f"not an IP address: {value!r}") from None
+    if not addr.is_global:
+        raise ValueError(f"{value} is not a public address")
+    return value
+
+
+PublicIPv4 = Annotated[IPv4, AfterValidator(_require_public_ip)]
 
 # IPv4 or IPv6 — used by tools (cymru_asn) that accept both. Loose pattern
 # accepting either form; dns_tool does the real parsing.
@@ -255,53 +267,77 @@ async def _dns_query(
 
 
 _START_TIME = time.time()
+
+# Claude.ai rejects tool results over ~150,000 chars (connector docs). Measured
+# 2026-11-09: check_ct_logs("google.com") returned 285k chars, 270k of it the
+# `certificates` list (304 certs with full SAN lists). Keep headroom for the
+# rest of the result.
+_CT_CERT_BUDGET = 100_000
+
+
+def _fit_ct_result(result: dict[str, Any], domain: str) -> dict[str, Any]:
+    """Cap `certificates` to the budget, newest-first order preserved as given,
+    and say so: counts plus a link to the full search on crt.sh. Everything else
+    (summary, subdomains, findings, verdict) is left untouched — the summary and
+    subdomain list are computed from ALL certificates before this cut."""
+    certs = result.get("certificates")
+    if not isinstance(certs, list):
+        return result
+    kept: list = []
+    used = 0
+    for cert in certs:
+        size = len(json.dumps(cert, default=str))
+        if kept and used + size > _CT_CERT_BUDGET:
+            break
+        kept.append(cert)
+        used += size
+    if len(kept) == len(certs):
+        return result
+    return {
+        **result,
+        "certificates": kept,
+        "certificates_total": len(certs),
+        "certificates_returned": len(kept),
+        "certificates_truncated": True,
+        "full_results_url": f"https://crt.sh/?q={domain}",
+    }
+
+
+INSTRUCTIONS = (
+    "DNS and email-security investigation tools for SOC work, backed by the dns_tool "
+    "library over DNSSEC-validating DoH. Use dns_query / reverse_dns / dnssec_validate "
+    "for lookups; check_spf, check_dmarc, check_dkim, check_mta_sts, check_dane, "
+    "check_smtp_tlsrpt and check_bimi for email authentication posture; check_rbl, "
+    "check_dbl, check_fast_flux, check_ct_logs, rdap_lookup and cymru_asn for threat "
+    "intel; check_zone_transfer for AXFR exposure. Results carry a verdict and "
+    "findings with ids — quote the finding ids. Every tool is read-only except "
+    "reset_stats, which clears this server's own call statistics; do not call it "
+    "unless asked."
+)
+
+
+def _tool(title: str, *, open_world: bool = True, read_only: bool = True) -> dict:
+    """Title + annotations. Claude's connector docs require readOnlyHint and
+    destructiveHint on every tool. Most tools reach external DNS/HTTP services
+    (openWorldHint); none change anything outside this server."""
+    return {
+        "title": title,
+        "annotations": ToolAnnotations(
+            title=title,
+            read_only_hint=read_only,
+            destructive_hint=not read_only,
+            open_world_hint=open_world,
+        ),
+    }
+
+
 # Prompt templates live at the repo root, copied to /app/prompts/ in the
 # container. From src/dns_mcp/server.py: ../../prompts/.
 _PROMPTS_DIR = Path(__file__).resolve().parent.parent.parent / "prompts"
 
 
-def create_server() -> FastMCP:
-    server_url = str(settings.server_url).rstrip("/")
-    pocket_id_url = str(settings.pocket_id_base_url).rstrip("/")
-
-    app = FastMCP(
-        name="dns-mcp",
-        host="0.0.0.0",
-        port=8000,
-        token_verifier=JWKSTokenVerifier(),
-        auth=AuthSettings(
-            # issuer_url drives `authorization_servers` in
-            # /.well-known/oauth-protected-resource — i.e. WHOSE discovery document
-            # the client fetches. Pointing it at Pocket ID means Claude.ai reads
-            # Pocket ID's real discovery (which advertises CIMD and no
-            # registration_endpoint) instead of our DCR shim's metadata route.
-            #
-            # Verified on tiny-mcp 2026-08-26: Claude.ai sends
-            #   client_id=https://claude.ai/oauth/mcp-oauth-client-metadata
-            # and Pocket ID materialises it as a client_type=cimd client. No DCR,
-            # no admin API key, no new client per reconnect.
-            #
-            # Requires, on the Pocket ID side: that URL in `cimdUrlAllowlist`, and
-            # `allowCimdClients: true` on this server's API resource.
-            #
-            # To revert: set back to AnyHttpUrl(server_url); the shim routes below
-            # still work.
-            issuer_url=AnyHttpUrl(pocket_id_url),
-            required_scopes=[],
-            # Unchanged — the RESOURCE identifier, not the authorization server.
-            resource_server_url=AnyHttpUrl(server_url),
-        ),
-    )
-
-    # The DCR shim that used to live here (/.well-known/oauth-authorization-server,
-    # /oauth/authorize, /oauth/register) was removed 2026-08-26. Claude.ai now reads
-    # Pocket ID's discovery directly (see issuer_url above), presents
-    # client_id=https://claude.ai/oauth/mcp-oauth-client-metadata, and Pocket ID
-    # fetches and materialises that Client ID Metadata Document itself.
-    #
-    # Consequences: no admin API key in this service, no new OIDC client per
-    # reconnect, and no per-client API grant (allowCimdClients on the API covers it).
-    # See project-guides/docs/mcp-server-target-shape.md. Git history has the shim.
+def create_server(cfg: Settings | None = None) -> FastMCP:
+    app = FastMCP(name="dns-mcp", instructions=INSTRUCTIONS, auth=build_auth(cfg or settings))
 
     @app.custom_route("/health", methods=["GET"])
     async def health(request: Request) -> Response:
@@ -316,7 +352,7 @@ def create_server() -> FastMCP:
 
     # ── Meta tools ────────────────────────────────────────────────────────
 
-    @app.tool()
+    @app.tool(**_tool("Ping / version", open_world=False))
     @track("ping")
     async def ping() -> dict[str, Any]:
         """Return current timestamp, server uptime, and dns_tool version."""
@@ -327,12 +363,12 @@ def create_server() -> FastMCP:
             "dns_tool_commit": dns_tool.__commit__,
         }
 
-    @app.tool()
+    @app.tool(**_tool("Who am I", open_world=False))
     @track("whoami")
     async def whoami() -> dict[str, Any]:
         """Return the authenticated user's identity from JWT claims."""
         token = get_access_token()
-        if not isinstance(token, JWTAccessToken):
+        if token is None:
             return {"error": "no identity available"}
         c = token.claims
         return {
@@ -344,7 +380,7 @@ def create_server() -> FastMCP:
 
     # ── DNS basic ─────────────────────────────────────────────────────────
 
-    @app.tool()
+    @app.tool(**_tool("DNS query"))
     @track("dns_query")
     async def dns_query(
         name: Domain,
@@ -378,7 +414,7 @@ def create_server() -> FastMCP:
         """
         return await _dns_query(name, qtype, dnssec, subnet)
 
-    @app.tool()
+    @app.tool(**_tool("Reverse DNS"))
     @track("reverse_dns")
     async def reverse_dns(
         ip: IPAddress,
@@ -403,7 +439,7 @@ def create_server() -> FastMCP:
 
     # ── DNSSEC ────────────────────────────────────────────────────────────
 
-    @app.tool()
+    @app.tool(**_tool("DNSSEC validation"))
     @track("dnssec_validate")
     async def dnssec_validate(domain: Domain, qtype: DnsQType = "A") -> dict[str, Any]:
         """Walk the full DNSSEC trust chain from the IANA root trust anchor down
@@ -426,7 +462,7 @@ def create_server() -> FastMCP:
 
     # ── Email security ────────────────────────────────────────────────────
 
-    @app.tool()
+    @app.tool(**_tool("SPF check"))
     @track("check_spf")
     async def check_spf(domain: Domain) -> dict[str, Any]:
         """Retrieve and recursively parse a domain's SPF policy.
@@ -438,7 +474,7 @@ def create_server() -> FastMCP:
         """
         return await asyncio.to_thread(_check_spf, domain, DOH_ENDPOINT)
 
-    @app.tool()
+    @app.tool(**_tool("DMARC check"))
     @track("check_dmarc")
     async def check_dmarc(domain: Domain) -> dict[str, Any]:
         """Retrieve and parse a domain's DMARC policy.
@@ -449,7 +485,7 @@ def create_server() -> FastMCP:
         """
         return await asyncio.to_thread(_check_dmarc, domain, DOH_ENDPOINT)
 
-    @app.tool()
+    @app.tool(**_tool("DKIM check"))
     @track("check_dkim")
     async def check_dkim(
         domain: Domain,
@@ -471,7 +507,7 @@ def create_server() -> FastMCP:
         """
         return await asyncio.to_thread(_check_dkim, domain, selector, DOH_ENDPOINT, headers=headers)
 
-    @app.tool()
+    @app.tool(**_tool("DKIM selector probe"))
     @track("enumerate_dkim_selectors")
     async def enumerate_dkim_selectors(
         domain: Domain, headers: MailHeaders | None = None
@@ -492,7 +528,7 @@ def create_server() -> FastMCP:
             _enumerate_dkim_selectors, domain, DOH_ENDPOINT, headers=headers
         )
 
-    @app.tool()
+    @app.tool(**_tool("SMTP TLS-RPT check"))
     @track("check_smtp_tlsrpt")
     async def check_smtp_tlsrpt(domain: Domain) -> dict[str, Any]:
         """SMTP TLS Reporting (RFC 8460) check for <domain>.
@@ -509,7 +545,7 @@ def create_server() -> FastMCP:
         """
         return await asyncio.to_thread(_check_smtp_tlsrpt, domain, DOH_ENDPOINT)
 
-    @app.tool()
+    @app.tool(**_tool("MTA-STS check"))
     @track("check_mta_sts")
     async def check_mta_sts(domain: Domain, fetch_policy: bool = True) -> dict[str, Any]:
         """MTA-STS (RFC 8461) DNS + policy file check for <domain>.
@@ -528,7 +564,7 @@ def create_server() -> FastMCP:
         """
         return await asyncio.to_thread(_check_mta_sts, domain, DOH_ENDPOINT, fetch_policy)
 
-    @app.tool()
+    @app.tool(**_tool("DANE (mail) check"))
     @track("check_dane")
     async def check_dane(domain: Domain) -> dict[str, Any]:
         """Check DANE/SMTP publication for all MX hosts of <domain>.
@@ -549,7 +585,7 @@ def create_server() -> FastMCP:
         """
         return await asyncio.to_thread(_check_dane, domain, DOH_ENDPOINT)
 
-    @app.tool()
+    @app.tool(**_tool("TLSA check"))
     @track("check_tlsa")
     async def check_tlsa(
         host: Domain,
@@ -568,7 +604,7 @@ def create_server() -> FastMCP:
         """
         return await asyncio.to_thread(_check_tlsa, host, port, proto, DOH_ENDPOINT)
 
-    @app.tool()
+    @app.tool(**_tool("CAA check"))
     @track("check_caa")
     async def check_caa(domain: Domain) -> dict[str, Any]:
         """CAA record analysis with CNAME chain + wildcard delegation detection.
@@ -589,7 +625,7 @@ def create_server() -> FastMCP:
         """
         return await asyncio.to_thread(_check_caa, domain, DOH_ENDPOINT)
 
-    @app.tool()
+    @app.tool(**_tool("BIMI check"))
     @track("check_bimi")
     async def check_bimi(
         domain: Domain,
@@ -621,7 +657,7 @@ def create_server() -> FastMCP:
 
     # ── Threat intelligence ───────────────────────────────────────────────
 
-    @app.tool()
+    @app.tool(**_tool("IP blocklist (RBL) check"))
     @track("check_rbl")
     async def check_rbl(ip: IPv4) -> dict[str, Any]:
         """Check an IPv4 address against 8 well-known RBLs (Spamhaus ZEN,
@@ -633,7 +669,7 @@ def create_server() -> FastMCP:
         """
         return await asyncio.to_thread(_check_rbl, ip, DOH_ENDPOINT)
 
-    @app.tool()
+    @app.tool(**_tool("Domain blocklist (DBL) check"))
     @track("check_dbl")
     async def check_dbl(domain: Domain) -> dict[str, Any]:
         """Check a domain against domain block lists (Spamhaus DBL, SURBL,
@@ -644,7 +680,7 @@ def create_server() -> FastMCP:
         """
         return await asyncio.to_thread(_check_dbl, domain, DOH_ENDPOINT)
 
-    @app.tool()
+    @app.tool(**_tool("IP to ASN (Team Cymru)"))
     @track("cymru_asn")
     async def cymru_asn(ip: IPAddress) -> dict[str, Any]:
         """Look up the autonomous system (ASN) and originating prefix for an
@@ -655,7 +691,7 @@ def create_server() -> FastMCP:
         """
         return await asyncio.to_thread(_cymru_asn, ip, DOH_ENDPOINT)
 
-    @app.tool()
+    @app.tool(**_tool("Fast-flux check"))
     @track("check_fast_flux")
     async def check_fast_flux(domain: Domain) -> dict[str, Any]:
         """Detect fast-flux behavior by repeatedly querying <domain> A records
@@ -667,7 +703,7 @@ def create_server() -> FastMCP:
         """
         return await asyncio.to_thread(_check_fast_flux, domain, DOH_ENDPOINT)
 
-    @app.tool()
+    @app.tool(**_tool("NSEC/NSEC3 info"))
     @track("nsec_info")
     async def nsec_info(zone: Domain) -> dict[str, Any]:
         """Probe a zone's NSEC / NSEC3 denial-of-existence mechanism.
@@ -679,9 +715,9 @@ def create_server() -> FastMCP:
         """
         return await asyncio.to_thread(_nsec_info, zone, DOH_ENDPOINT)
 
-    @app.tool()
+    @app.tool(**_tool("Resolver hijack check"))
     @track("detect_hijacking")
-    async def detect_hijacking(resolver_ip: IPv4) -> dict[str, Any]:
+    async def detect_hijacking(resolver_ip: PublicIPv4) -> dict[str, Any]:
         """Test a recursive resolver for tampering / NXDOMAIN hijacking by
         querying known-good and known-bad names against it.
 
@@ -691,7 +727,7 @@ def create_server() -> FastMCP:
         """
         return await asyncio.to_thread(_detect_hijacking, resolver_ip, DOH_ENDPOINT)
 
-    @app.tool()
+    @app.tool(**_tool("Certificate Transparency search"))
     @track("check_ct_logs")
     async def check_ct_logs(
         domain: Domain,
@@ -720,10 +756,16 @@ def create_server() -> FastMCP:
 
         Set include_expired=True to emit expired certs in the certificates
         list (they're always counted in the summary regardless).
-        """
-        return await asyncio.to_thread(_check_ct_logs, domain, include_expired)
 
-    @app.tool()
+        Large domains: the certificates list is capped to fit the result size
+        limit — `certificates_truncated`, `certificates_total` and
+        `certificates_returned` say so, `full_results_url` opens the complete
+        crt.sh search. `summary` and `subdomains` always cover every cert.
+        """
+        result = await asyncio.to_thread(_check_ct_logs, domain, include_expired)
+        return _fit_ct_result(result, domain)
+
+    @app.tool(**_tool("Zone transfer (AXFR) exposure"))
     @track("check_zone_transfer")
     async def check_zone_transfer(domain: Domain) -> dict[str, Any]:
         """Attempt AXFR zone transfer against every authoritative NS for <domain>.
@@ -748,7 +790,7 @@ def create_server() -> FastMCP:
 
     # ── Registration / RDAP ───────────────────────────────────────────────
 
-    @app.tool()
+    @app.tool(**_tool("RDAP registration lookup"))
     @track("rdap_lookup")
     async def rdap_lookup(domain: Domain) -> dict[str, Any]:
         """Query RDAP for domain registration data.
@@ -762,7 +804,7 @@ def create_server() -> FastMCP:
 
     # ── Observability ─────────────────────────────────────────────────────
 
-    @app.tool()
+    @app.tool(**_tool("Session stats", open_world=False))
     @track("session_stats")
     async def session_stats() -> dict[str, Any]:
         """Return per-tool call statistics for the current server session.
@@ -786,7 +828,7 @@ def create_server() -> FastMCP:
             "tools": per_tool,
         }
 
-    @app.tool()
+    @app.tool(**_tool("Reset session stats", open_world=False, read_only=False))
     @track("reset_stats")
     async def reset_stats() -> dict[str, Any]:
         """Clear all tool-call statistics and restart the session clock.

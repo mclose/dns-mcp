@@ -4,44 +4,25 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dns-mcp"
-version = "2.0.0"
+version = "2.1.0"
 description = "DNS security MCP server for SOC investigations — Streamable HTTP / OAuth via Pocket ID"
 requires-python = ">=3.12"
-# This is an application, not a library: `make deploy` pushes to `vps`, whose
-# post-receive hook rebuilds the image, and the Dockerfile does a bare
-# `pip install .`. Every deploy therefore re-resolves these constraints from
-# scratch, so an unbounded floor means the deployed image is a function of the
-# calendar rather than of this commit. mcp 2.0.0 proved it: it removed
-# `mcp.server.fastmcp` and a rebuild produced an image whose import failed.
-#
-# Upper bounds below are a stopgap that blocks major-version breaks. They do
-# NOT make builds reproducible, and note fastapi/uvicorn/httpx are 0.x, where
-# minor bumps are allowed to break -- `<1` buys little there. The real fix is a
-# hash-pinned lockfile plus a digest-pinned base image; see TODO.md.
-#
-# Versions in the last known-good production image (dns_tool 0.13.2):
-#   fastapi 0.141.1 · uvicorn 0.52.0 · mcp 1.29.0 · httpx 0.28.1
-#   python-jose 3.5.0 · pydantic-settings 2.14.2 · pydantic 2.13.4
+# Floors only; exact versions live in uv.lock (META-CLAUDE P16, target shape
+# §2). The image runs `uv sync --locked`, so a rebuild can never pull a new
+# major — that replaces the old per-dependency caps. The dns_tool wheel is
+# pinned by URL: dns-mcp releases track dns_tool releases (docs/release-process.md).
 dependencies = [
-    "fastapi>=0.115,<1",
-    "uvicorn[standard]>=0.32,<1",
-    # mcp 2.x removed `mcp.server.fastmcp` (FastMCP moved to a new module
-    # layout), so server.py's import fails outright. Raising this cap requires
-    # porting the FastMCP import + app construction first.
-    "mcp>=1.6.0,<2",
-    "httpx[http2]>=0.27,<1",
-    "python-jose[cryptography]>=3.3,<4",
-    "pydantic-settings>=2.7,<3",
-    # Imported directly by server.py (dns.reversename for reverse_dns); also a
-    # dns_tool dependency, so this only makes the direct use explicit + capped.
-    "dnspython>=2.6,<3",
+    "fastmcp>=4.1.6",
+    "pydantic-settings>=2.7",
+    "httpx[http2]>=0.27",
+    # Imported directly by server.py (dns.reversename for reverse_dns).
+    "dnspython>=2.6",
     "dns-tool @ https://dist.lab.deflationhollow.net/dns_tool-0.17.0-py3-none-any.whl",
 ]
 
-[project.optional-dependencies]
+[dependency-groups]
 dev = [
-    "ruff>=0.9",
-    "pre-commit>=4",
+    "ruff>=0.15.4",
     "pytest>=8",
     "pytest-asyncio>=0.24",
 ]
@@ -53,12 +34,17 @@ where = ["src"]
 testpaths = ["tests"]
 addopts = "-ra --strict-markers"
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 
 [tool.ruff]
 line-length = 100
 target-version = "py312"
 # tools/ and *.legacy are pre-2.0.0 code preserved for reference.
-extend-exclude = ["tools", "*.legacy"]
+extend-exclude = ["tools", "*.legacy", "*.md"]
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP"]
+select = ["E", "F", "I", "UP", "B", "S"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "S104", "S105", "S106"]
+"scripts/**" = ["S603", "S607"]

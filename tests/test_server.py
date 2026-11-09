@@ -12,7 +12,7 @@ DNS; other tool handlers are exercised through the schema layer only.
 from __future__ import annotations
 
 import pytest
-from mcp.server.fastmcp.exceptions import ToolError
+from fastmcp.exceptions import ToolError
 
 from dns_mcp.server import create_server
 
@@ -59,7 +59,9 @@ EXPECTED_PROMPTS = {
 
 @pytest.fixture
 def app():
-    return create_server()
+    from tests.conftest import ClientApp
+
+    return ClientApp(create_server())
 
 
 # ── Registration counts ──────────────────────────────────────────────────
@@ -97,7 +99,7 @@ async def test_every_tool_has_a_description(app) -> None:
 
 async def test_dns_query_schema_advertises_domain_constraints(app) -> None:
     tools = {t.name: t for t in await app.list_tools()}
-    schema = tools["dns_query"].inputSchema
+    schema = tools["dns_query"].input_schema
     name_prop = schema["properties"]["name"]
     assert name_prop["maxLength"] == 253
     assert "pattern" in name_prop
@@ -106,7 +108,7 @@ async def test_dns_query_schema_advertises_domain_constraints(app) -> None:
 
 async def test_dns_query_schema_advertises_qtype_enum(app) -> None:
     tools = {t.name: t for t in await app.list_tools()}
-    schema = tools["dns_query"].inputSchema
+    schema = tools["dns_query"].input_schema
     qtype = schema["properties"]["qtype"]
     assert "A" in qtype["enum"]
     assert "NSEC3" in qtype["enum"]
@@ -116,7 +118,7 @@ async def test_dns_query_schema_advertises_qtype_enum(app) -> None:
 
 async def test_dns_query_dnssec_default_true(app) -> None:
     tools = {t.name: t for t in await app.list_tools()}
-    schema = tools["dns_query"].inputSchema
+    schema = tools["dns_query"].input_schema
     assert schema["properties"]["dnssec"]["default"] is True
 
 
@@ -124,7 +126,7 @@ async def test_dns_query_subnet_optional(app) -> None:
     """dns_tool 0.17.0: ECS hint. The wrapper-coverage check can't see new
     parameters, so pin it here."""
     tools = {t.name: t for t in await app.list_tools()}
-    schema = tools["dns_query"].inputSchema
+    schema = tools["dns_query"].input_schema
     assert "subnet" in schema["properties"]
     assert schema["required"] == ["name"]
     sub = _non_null(schema["properties"]["subnet"])
@@ -160,7 +162,7 @@ async def test_dns_query_bad_subnet_rejected_at_boundary(app) -> None:
 
 async def test_check_tlsa_port_range(app) -> None:
     tools = {t.name: t for t in await app.list_tools()}
-    schema = tools["check_tlsa"].inputSchema
+    schema = tools["check_tlsa"].input_schema
     port = schema["properties"]["port"]
     assert port["minimum"] == 1
     assert port["maximum"] == 65535
@@ -169,7 +171,7 @@ async def test_check_tlsa_port_range(app) -> None:
 
 async def test_check_tlsa_proto_enum(app) -> None:
     tools = {t.name: t for t in await app.list_tools()}
-    schema = tools["check_tlsa"].inputSchema
+    schema = tools["check_tlsa"].input_schema
     proto = schema["properties"]["proto"]
     assert set(proto["enum"]) == {"tcp", "udp"}
 
@@ -184,7 +186,7 @@ def _non_null(prop: dict) -> dict:
 
 async def test_check_dkim_selector_schema(app) -> None:
     tools = {t.name: t for t in await app.list_tools()}
-    schema = tools["check_dkim"].inputSchema
+    schema = tools["check_dkim"].input_schema
     sel = _non_null(schema["properties"]["selector"])
     assert sel["maxLength"] == 63
     assert sel["pattern"] == r"^[a-zA-Z0-9_-]+$"
@@ -194,7 +196,7 @@ async def test_check_dkim_accepts_headers_instead_of_selector(app) -> None:
     """dns_tool 0.14.0 (#39): selector may come from DKIM-Signature evidence.
     The wrapper-coverage check can't see new parameters, so pin them here."""
     tools = {t.name: t for t in await app.list_tools()}
-    schema = tools["check_dkim"].inputSchema
+    schema = tools["check_dkim"].input_schema
     assert "headers" in schema["properties"]
     assert schema["required"] == ["domain"]
     assert _non_null(schema["properties"]["headers"])["maxLength"] == 65536
@@ -202,7 +204,7 @@ async def test_check_dkim_accepts_headers_instead_of_selector(app) -> None:
 
 async def test_enumerate_dkim_selectors_accepts_headers(app) -> None:
     tools = {t.name: t for t in await app.list_tools()}
-    schema = tools["enumerate_dkim_selectors"].inputSchema
+    schema = tools["enumerate_dkim_selectors"].input_schema
     assert "headers" in schema["properties"]
     assert schema["required"] == ["domain"]
 
@@ -320,3 +322,77 @@ async def test_prompt_returns_file_body(app) -> None:
         # The handler returns a plain string → first message content.text
         text = messages[0].content.text
         assert text == expected, f"{prompt_name} body mismatch"
+
+
+# ── 2026-11 standard: annotations, instructions, SSRF guard ───────────────
+
+
+async def test_every_tool_has_title_and_honest_hints(app) -> None:
+    tools = await app.list_tools()
+    assert len(tools) == 26
+    for t in tools:
+        a = t.annotations
+        assert t.title and a is not None, t.name
+        if t.name == "reset_stats":
+            # The one tool that changes state (clears this server's counters).
+            assert a.read_only_hint is False and a.destructive_hint is True
+        else:
+            assert a.read_only_hint is True and a.destructive_hint is False, t.name
+        assert a.open_world_hint is (
+            t.name not in {"ping", "whoami", "session_stats", "reset_stats"}
+        )
+
+
+def test_instructions_name_the_tool_families() -> None:
+    from dns_mcp.server import INSTRUCTIONS
+
+    for word in ("check_dmarc", "check_zone_transfer", "reset_stats"):
+        assert word in INSTRUCTIONS
+
+
+@pytest.mark.parametrize(
+    "ip", ["10.0.0.5", "127.0.0.11", "172.18.0.1", "169.254.169.254", "192.168.1.1", "0.0.0.0"]
+)
+async def test_detect_hijacking_rejects_internal_resolvers(app, ip) -> None:
+    with pytest.raises(ToolError):
+        await app.call_tool("detect_hijacking", {"resolver_ip": ip})
+
+
+async def test_detect_hijacking_accepts_public_resolver(app, monkeypatch) -> None:
+    import dns_mcp.server as server_mod
+
+    monkeypatch.setattr(server_mod, "_detect_hijacking", lambda ip, *a, **k: {"resolver": ip})
+    _, structured = await app.call_tool("detect_hijacking", {"resolver_ip": "8.8.8.8"})
+    assert structured == {"resolver": "8.8.8.8"}
+
+
+async def test_check_ct_logs_caps_certificates_and_links_out(app, monkeypatch) -> None:
+    """google.com returned 285k chars on 2026-11-09; Claude.ai's limit is ~150k."""
+    import json
+
+    import dns_mcp.server as server_mod
+
+    fake_cert = {"cert_sha256": "a" * 64, "sans": [f"host{i}.example.com" for i in range(40)]}
+    big = {
+        "verdict": "pass",
+        "summary": {"unique_subdomains": 500},
+        "subdomains": ["x.example.com"],
+        "certificates": [fake_cert] * 400,
+    }
+    monkeypatch.setattr(server_mod, "_check_ct_logs", lambda d, e: big)
+    _, out = await app.call_tool("check_ct_logs", {"domain": "example.com"})
+    assert len(json.dumps(out)) < 150_000
+    assert out["certificates_truncated"] is True
+    assert out["certificates_total"] == 400
+    assert out["certificates_returned"] == len(out["certificates"]) < 400
+    assert out["full_results_url"] == "https://crt.sh/?q=example.com"
+    assert out["summary"] == {"unique_subdomains": 500}
+
+
+async def test_check_ct_logs_small_result_untouched(app, monkeypatch) -> None:
+    import dns_mcp.server as server_mod
+
+    small = {"verdict": "pass", "certificates": [{"cert_sha256": "b"}]}
+    monkeypatch.setattr(server_mod, "_check_ct_logs", lambda d, e: small)
+    _, out = await app.call_tool("check_ct_logs", {"domain": "example.com"})
+    assert out == small

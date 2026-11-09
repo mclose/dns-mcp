@@ -1,73 +1,62 @@
-import time
-from typing import Any
+"""Pocket ID auth on fastmcp's JWTVerifier — no hand-rolled JWKS code.
 
-import httpx
-from jose import JWTError
-from jose import jwt as jose_jwt
-from mcp.server.auth.provider import AccessToken, TokenVerifier
+Three layers, all fail closed (project-guides mcp-server-target-shape.md §3):
+  1. IdP: the shared Claude CIMD client is restricted to the `mcp_users` group.
+  2. Audience: `aud` must equal this server's resource, <server_url>/mcp.
+  3. ALLOWED_SUBS: per-server allowlist of Pocket ID user ids. Empty = nobody.
+"""
 
-from .config import settings
+import logging
 
-_jwks_cache: dict[str, Any] | None = None
-_jwks_cache_at: float = 0
-_JWKS_TTL = 3600  # refresh JWKS once per hour
+from fastmcp.server.auth import JWTVerifier, RemoteAuthProvider
+from fastmcp.server.auth.auth import AccessToken
+from pydantic import AnyHttpUrl
 
+from .config import Settings
 
-async def _fetch_jwks() -> dict[str, Any]:
-    global _jwks_cache, _jwks_cache_at
-    now = time.monotonic()
-    if _jwks_cache is not None and now - _jwks_cache_at < _JWKS_TTL:
-        return _jwks_cache
-    base = str(settings.pocket_id_base_url).rstrip("/")
-    async with httpx.AsyncClient(timeout=10) as client:
-        resp = await client.get(f"{base}/.well-known/jwks.json")
-        resp.raise_for_status()
-        _jwks_cache = resp.json()
-        _jwks_cache_at = now
-        return _jwks_cache
+log = logging.getLogger("dns_mcp.auth")
 
 
-def expected_audience() -> str:
-    """The `aud` a token must carry to be accepted here: our own resource URI.
+class AllowlistJWTVerifier(JWTVerifier):
+    """fastmcp's JWTVerifier plus a fail-closed `sub` allowlist.
 
-    Claude sends RFC 8707 `resource=<server_url>`; Pocket ID validates it against
-    the registered API and stamps it into `aud` with any trailing slash trimmed
-    (`resolveResource`, verified on 2.14.0 and 2.19.2). pydantic's AnyHttpUrl adds
-    a trailing slash to a bare origin, so strip it to match. Pinning this stops a
-    token minted for another MCP server on the same IdP being replayed here.
+    Signature, issuer, expiry and audience (list-aware; a missing `aud` is
+    rejected) are fastmcp's job. This adds only the per-server "which users"
+    layer, which the IdP group gate cannot express — one shared CIMD client
+    serves every connector.
     """
-    return str(settings.server_url).rstrip("/")
 
+    def __init__(self, *, allowed_subs: frozenset[str], **kwargs) -> None:
+        super().__init__(**kwargs)
+        self._allowed_subs = frozenset(allowed_subs)
 
-class JWTAccessToken(AccessToken):
-    """AccessToken extended with the full decoded JWT claims."""
-
-    claims: dict[str, Any] = {}
-
-
-class JWKSTokenVerifier(TokenVerifier):
-    """Validates Bearer JWTs against Pocket ID's JWKS endpoint."""
-
-    async def verify_token(self, token: str) -> AccessToken | None:
-        try:
-            jwks = await _fetch_jwks()
-            expected_issuer = str(settings.pocket_id_base_url).rstrip("/")
-            claims: dict[str, Any] = jose_jwt.decode(
-                token,
-                jwks,
-                algorithms=["RS256", "ES256"],
-                issuer=expected_issuer,
-                audience=expected_audience(),
-                options={"require_aud": True, "require_exp": True, "require_sub": True},
-            )
-        except (JWTError, Exception):
+    async def load_access_token(self, token: str) -> AccessToken | None:
+        access = await super().load_access_token(token)
+        if access is None:
             return None
+        sub = access.claims.get("sub")
+        if not sub or sub not in self._allowed_subs:
+            log.warning("token rejected: sub=%r not in ALLOWED_SUBS", sub)
+            return None
+        return access
 
-        scope_str: str = claims.get("scope", "")
-        return JWTAccessToken(
-            token=token,
-            client_id=claims.get("client_id") or claims.get("azp") or "unknown",
-            scopes=scope_str.split() if scope_str else [],
-            expires_at=claims.get("exp"),
-            claims=claims,
-        )
+
+def build_auth(settings: Settings) -> RemoteAuthProvider:
+    if not settings.allowed_sub_set:
+        log.warning("ALLOWED_SUBS is empty: every token will be rejected")
+    verifier = AllowlistJWTVerifier(
+        jwks_uri=f"{settings.issuer}/.well-known/jwks.json",
+        issuer=settings.issuer,
+        algorithm="RS256",
+        # Pocket ID stamps the RFC 8707 resource into `aud`. fastmcp advertises
+        # <base_url>/mcp as the resource, so the pin is derived from the same value.
+        audience=settings.resource,
+        allowed_subs=settings.allowed_sub_set,
+    )
+    return RemoteAuthProvider(
+        token_verifier=verifier,
+        # Pocket ID, NOT this server: clients read its discovery, see CIMD and
+        # no registration_endpoint, and never attempt DCR.
+        authorization_servers=[AnyHttpUrl(settings.issuer)],
+        base_url=AnyHttpUrl(settings.base_url),
+    )

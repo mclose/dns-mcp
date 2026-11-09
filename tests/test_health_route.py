@@ -1,13 +1,6 @@
-"""Tests for the three custom OAuth bootstrap routes mounted on FastMCP.
+"""`/health` is the one unauthenticated route (the Docker healthcheck probes it).
 
-  GET  /.well-known/oauth-authorization-server  — discovery doc
-  GET  /oauth/authorize                          — scope-inject + 302
-  POST /oauth/register                           — DCR proxy to Pocket ID
-
-`/health` is also tested here as a fourth no-auth custom route.
-
-Pocket ID admin API calls (POST .../api/oidc/clients) are stubbed via an
-httpx.AsyncClient.post monkeypatch.
+The DCR shim routes it used to sit beside were removed 2026-08-26 (CIMD).
 """
 
 from __future__ import annotations
@@ -20,17 +13,7 @@ from dns_mcp.server import create_server
 
 @pytest.fixture
 def client() -> TestClient:
-    app = create_server().streamable_http_app()
-    return TestClient(app)
-
-
-# ── /.well-known/oauth-authorization-server ──────────────────────────────
-
-
-# The DCR shim (/.well-known/oauth-authorization-server, /oauth/authorize,
-# /oauth/register) was removed 2026-08-26 in favour of Pocket ID's Client ID
-# Metadata Document support, so the twelve tests that covered those routes went
-# with it. Git history has them if a non-CIMD client ever needs the shim back.
+    return TestClient(create_server().http_app(path="/mcp"))
 
 
 def test_health_returns_status(client: TestClient) -> None:

@@ -155,22 +155,24 @@ No copy-pasting dig commands. No tab-switching. One question.
 ### Prerequisites
 
 - Docker
-- A Pocket ID instance (or any OIDC provider supporting Dynamic Client Registration)
+- A Pocket ID instance (>= 2.13, for Client ID Metadata Documents)
 - A reverse proxy with TLS termination (Caddy, nginx, etc.)
 - A domain name pointing at your reverse proxy
 
 ### 1. Pocket ID
 
-Mint an admin API key in Pocket ID's UI: **Settings → API Keys → Create new
-key**. Name it `dns-mcp` so you can revoke just this service if needed. Copy
-the key value (it is shown once).
+No admin key. Register this server's resource, `https://dns-mcp.example.com/mcp`,
+as an API (**Settings → APIs**) and turn on **Allow all metadata document
+clients**. Make sure `https://claude.ai/oauth/mcp-oauth-client-metadata` is in
+the CIMD URL allowlist, and restrict the resulting `Claude` client to a user
+group if your Pocket ID has users who should not reach your MCP servers.
 
-### 2. .env
+### 2. .env (mode 600)
 
 ```bash
 POCKET_ID_BASE_URL=https://pocketid.example.com
-POCKET_ID_API_KEY=<the key from step 1>
 SERVER_URL=https://dns-mcp.example.com
+ALLOWED_SUBS=<your Pocket ID user id>   # empty = nobody
 ```
 
 ### 3. Deploy
@@ -202,28 +204,19 @@ DNS-01 setup that serves dns-mcp.lab.deflationhollow.net), drop a
 
 ### 5. Connect
 
-Add `https://dns-mcp.example.com/mcp` as a connector in your MCP client. The
-OAuth flow runs once on first connect — Claude.ai redirects to Pocket ID, you
-authenticate, the server creates a DCR client on your Pocket ID instance, and
-returns a JWT. Subsequent tool calls send that JWT as a bearer token; the
-server verifies against Pocket ID JWKS.
+Add `https://dns-mcp.example.com/mcp` as a connector in your MCP client. On
+first connect Claude.ai reads this server's protected-resource metadata, finds
+Pocket ID, identifies itself by its Client ID Metadata Document URL, and you
+sign in with a passkey. Tool calls carry the resulting JWT; the server checks
+its signature, issuer, audience (`<SERVER_URL>/mcp`) and `sub` allowlist.
 
 ## Open work
 
-Eleven tools from the 1.x stdio architecture are not yet ported into
-`dns_tool` and are therefore not registered in 2.0.0:
-
-- `check_caa` (with CNAME chain tracing and wildcard delegation detection)
-- `check_zone_transfer` (AXFR enumeration)
-- `check_bimi`, `check_mta_sts`, `check_smtp_tlsrpt`
-- `check_ct_logs` (Certificate Transparency log enumeration via crt.sh)
-- `timestamp_converter`, `reverse_dns`
-- `enumerate_dkim_selectors`, `dns_dig_style`, `dns_query_dot`
-
-Reference implementations live in `server.py.legacy`. Each port involves
-moving the function into the appropriate `dns_tool` module
-(`dns_tool.email`, `dns_tool.intel`, etc.), adding tests on the library
-side, and registering a one-line wrapper in `src/dns_mcp/server.py`.
+Three tools from the 1.x stdio architecture are not ported into `dns_tool` yet:
+`timestamp_converter`, `dns_dig_style`, `dns_query_dot`. Reference
+implementations live in `server.py.legacy`. A port moves the function into the
+right `dns_tool` module with library-side tests, then registers a one-line
+wrapper in `src/dns_mcp/server.py` (`make coverage-check` enforces the pairing).
 
 ## File structure
 
@@ -231,18 +224,20 @@ side, and registering a one-line wrapper in `src/dns_mcp/server.py`.
 dns-mcp/
 ├── src/dns_mcp/
 │   ├── __init__.py
-│   ├── __main__.py            # entrypoint — create_server().run(transport="streamable-http")
-│   ├── config.py              # pydantic-settings Settings class
-│   ├── auth.py                # JWKSTokenVerifier + JWTAccessToken
-│   └── server.py              # FastMCP app: OAuth routes + 16 tools + 4 prompts (~430 lines)
+│   ├── __main__.py            # entrypoint — create_server(settings).run(transport="http")
+│   ├── config.py              # pydantic-settings Settings (required URLs, ALLOWED_SUBS)
+│   ├── auth.py                # fastmcp JWTVerifier + fail-closed sub allowlist
+│   ├── tracking.py            # per-call JSON log lines + session stats
+│   └── server.py              # fastmcp app: 26 tools + 4 prompts + /health
 ├── prompts/                   # MCP analyst prompt text files
-├── tests/                     # pytest unit tests (legacy — pending rewrite)
+├── tests/                     # pytest (auth, schema, annotations, tracking, prompts)
 ├── tools/                     # operator scripts (smoke tests, deploy helpers)
 ├── server.py.legacy           # 1.x stdio server (5,095 lines), reference for 11 deferred tool ports
 ├── compose.yaml
 ├── Dockerfile
-├── pyproject.toml             # dns_tool URL-pinned to dist tarball
-└── Makefile                   # build/lint/import-check
+├── pyproject.toml             # floors + dns_tool URL pin; exact versions in uv.lock
+├── uv.lock
+└── Makefile                   # install/check/build/deploy/bump-dns_tool
 ```
 
 ## Day-to-day

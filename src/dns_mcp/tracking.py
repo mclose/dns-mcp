@@ -80,13 +80,21 @@ def _session_id() -> str | None:
     stdio).
     """
     try:
-        from mcp.server.lowlevel.server import request_ctx
+        from fastmcp.server.dependencies import get_http_request
 
-        req = request_ctx.get().request
-        if req is None:
-            return None
-        return req.headers.get("mcp-session-id")
-    except Exception:  # LookupError outside a request; never fail a call over logging
+        return get_http_request().headers.get("mcp-session-id")
+    except Exception:  # RuntimeError outside a request; never fail a call over logging
+        return None
+
+
+def _sub() -> str | None:
+    """Pocket ID `sub` of the authenticated caller (audit trail), or None."""
+    try:
+        from fastmcp.server.dependencies import get_access_token
+
+        tok = get_access_token()
+        return str(tok.claims.get("sub")) if tok is not None else None
+    except Exception:  # outside a request; never fail a call over logging
         return None
 
 
@@ -105,6 +113,7 @@ def _emit(
         "duration_ms": round(duration_ms, 1),
         "outcome": "exception" if exc is not None else "ok",
         "session_id": _session_id(),
+        "sub": _sub(),
     }
     if exc is None:
         if isinstance(result, dict):
