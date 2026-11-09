@@ -47,7 +47,7 @@ jobs:
           async def main():
               async with Client(create_server()) as c:
                   tools = await c.list_tools()
-              assert len(tools) == 26, len(tools)
+              assert len(tools) == 25, len(tools)
               print(f'OK: {len(tools)} tools')
           asyncio.run(main())
           "

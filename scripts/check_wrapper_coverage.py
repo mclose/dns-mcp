@@ -108,7 +108,7 @@ def main() -> int:
         # reset_stats, etc.) — not a problem. List them for context.
         # dns_query is a thin layer over dns_tool.core.doh_query + parse_response
         # (infrastructure helpers, not tool-shaped), so it's adapter-owned here.
-        adapter_owned = {"ping", "whoami", "session_stats", "reset_stats", "dns_query"}
+        adapter_owned = {"ping", "whoami", "session_stats", "dns_query"}
         unexpected = [n for n in extra if n not in adapter_owned]
         if unexpected:
             print()

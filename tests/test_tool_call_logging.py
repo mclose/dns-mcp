@@ -32,6 +32,7 @@ REQUIRED_FIELDS = {
     "verdict",
     "errors",
     "session_id",
+    "protocol",
 }
 
 
@@ -148,7 +149,9 @@ def test_session_id_and_sub_read_from_request(tool_log, monkeypatch) -> None:
     monkeypatch.setattr(
         deps,
         "get_http_request",
-        lambda: types.SimpleNamespace(headers={"mcp-session-id": "sess-abc123"}),
+        lambda: types.SimpleNamespace(
+            headers={"mcp-session-id": "sess-abc123", "mcp-protocol-version": "2025-11-25"}
+        ),
     )
     monkeypatch.setattr(
         deps, "get_access_token", lambda: types.SimpleNamespace(claims={"sub": "user-123"})
@@ -161,6 +164,7 @@ def test_session_id_and_sub_read_from_request(tool_log, monkeypatch) -> None:
     asyncio.run(ping())
     line = _lines(tool_log)[0]
     assert line["session_id"] == "sess-abc123"
+    assert line["protocol"] == "2025-11-25"
     assert line["sub"] == "user-123"
 
 

@@ -89,7 +89,6 @@ from . import tracking
 from .auth import build_auth
 from .config import Settings, settings
 from .tracking import get_stats, track
-from .tracking import reset_stats as _reset_stats_impl
 
 # ── Tool parameter types ─────────────────────────────────────────────────
 # Defined once and reused across @app.tool() signatures below. Pydantic Field
@@ -310,22 +309,20 @@ INSTRUCTIONS = (
     "check_smtp_tlsrpt and check_bimi for email authentication posture; check_rbl, "
     "check_dbl, check_fast_flux, check_ct_logs, rdap_lookup and cymru_asn for threat "
     "intel; check_zone_transfer for AXFR exposure. Results carry a verdict and "
-    "findings with ids — quote the finding ids. Every tool is read-only except "
-    "reset_stats, which clears this server's own call statistics; do not call it "
-    "unless asked."
+    "findings with ids — quote the finding ids. Every tool is read-only."
 )
 
 
-def _tool(title: str, *, open_world: bool = True, read_only: bool = True) -> dict:
+def _tool(title: str, *, open_world: bool = True) -> dict:
     """Title + annotations. Claude's connector docs require readOnlyHint and
     destructiveHint on every tool. Most tools reach external DNS/HTTP services
-    (openWorldHint); none change anything outside this server."""
+    (openWorldHint); every tool is read-only."""
     return {
         "title": title,
         "annotations": ToolAnnotations(
             title=title,
-            read_only_hint=read_only,
-            destructive_hint=not read_only,
+            read_only_hint=True,
+            destructive_hint=False,
             open_world_hint=open_world,
         ),
     }
@@ -826,20 +823,6 @@ def create_server(cfg: Settings | None = None) -> FastMCP:
             "uptime_seconds": round(uptime, 1),
             "total_calls": total,
             "tools": per_tool,
-        }
-
-    @app.tool(**_tool("Reset session stats", open_world=False, read_only=False))
-    @track("reset_stats")
-    async def reset_stats() -> dict[str, Any]:
-        """Clear all tool-call statistics and restart the session clock.
-
-        Use sparingly — once stats are cleared they cannot be recovered.
-        Returns the new session_start timestamp.
-        """
-        _reset_stats_impl()
-        return {
-            "status": "reset",
-            "session_start": tracking._session_start.isoformat(),
         }
 
     # ── Prompts ───────────────────────────────────────────────────────────
