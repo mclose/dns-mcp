@@ -2,71 +2,52 @@ name: CI
 
 on:
   push:
-    branches: ["main"]
+    branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
-  lint:
-    name: Lint
+  check:
+    name: Lint + pytest + wrapper coverage
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: pre-commit/action@v3.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          python-version: "3.12"
+      - run: uv sync --locked
+      - name: Lint
+        run: |
+          uv run --no-sync ruff check .
+          uv run --no-sync ruff format --check .
+      - name: Pytest
+        # No env: tests/conftest.py sets Settings env at import, before any
+        # dns_mcp import. Providing vars here would shadow the test values.
+        run: uv run --no-sync pytest -q
+      - name: dns_tool wrapper coverage
+        run: uv run --no-sync python scripts/check_wrapper_coverage.py
 
-  build:
+  image:
     name: Build & import-check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Build image
-        run: docker build -t dns-mcp:ci .
-
-      - name: Import-check (instantiate FastMCP app, list tools)
-        # Verifies pyproject deps resolve (incl. dns_tool URL dep), the
-        # package imports, OAuth bootstrap routes register, and the
-        # expected set of MCP tools is discoverable inside the built image.
-        # Test-level coverage of registration shape lives in the Pytest
-        # job; this is a build-artifact sanity check.
-        env:
-          POCKET_ID_BASE_URL: https://dummy.example.com
-          POCKET_ID_API_KEY: dummy
-          SERVER_URL: https://dummy.example.com
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: docker build -t dns-mcp:ci .
+      - name: Import-check (instantiate the app, list tools)
         run: |
           docker run --rm \
-            -e POCKET_ID_BASE_URL \
-            -e POCKET_ID_API_KEY \
-            -e SERVER_URL \
-            --entrypoint python \
-            dns-mcp:ci -c "
+            -e POCKET_ID_BASE_URL=https://dummy.example.com \
+            -e SERVER_URL=https://dummy.example.com \
+            --entrypoint python dns-mcp:ci -c "
           import asyncio
+          from fastmcp import Client
           from dns_mcp.server import create_server
-          app = create_server()
-          tools = asyncio.run(app.list_tools())
-          assert app.name == 'dns-mcp', f'unexpected app name: {app.name}'
-          assert len(tools) >= 20, f'expected >=20 tools, got {len(tools)}'
-          print(f'OK: {app.name}, {len(tools)} tools registered')
+          async def main():
+              async with Client(create_server()) as c:
+                  tools = await c.list_tools()
+              assert len(tools) == 26, len(tools)
+              print(f'OK: {len(tools)} tools')
+          asyncio.run(main())
           "
-
-  test:
-    name: Pytest
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Install package + dev deps
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e '.[dev]'
-
-      - name: Run pytest
-        # No env: tests/conftest.py sets Settings env at module-import,
-        # before any dns_mcp import. Providing the vars here would shadow
-        # the test values and break fixtures that embed them literally
-        # (signed JWT issuer, discovery-doc assertions).
-        run: pytest tests/ -v

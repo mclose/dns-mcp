@@ -2,6 +2,7 @@ services:
   dns-mcp:
     build: .
     container_name: dns-mcp
+    init: true  # reap orphaned healthcheck children (funes-mcp #5)
     restart: unless-stopped
     env_file: .env
     networks:

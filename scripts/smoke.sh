@@ -12,7 +12,9 @@
 #
 # Env:
 #   DNS_MCP_URL    — overrides the base URL (same as $1)
-#   DNS_MCP_TOKEN  — bearer JWT for authenticated MCP steps (same as $2)
+#   DNS_MCP_TOKEN  — bearer JWT for authenticated MCP steps (same as $2). Its aud
+#                    must be <BASE>/mcp, e.g. from a device-flow client with API
+#                    access:  pocketid token --client-id <id> --resource <BASE>/mcp
 #
 # Returns 0 if every step passes, 1 on the first failure.
 set -u
@@ -74,32 +76,37 @@ else
   fail "/health body missing status=ok"
 fi
 
-# ── 2. OAuth discovery doc ──────────────────────────────────────────────
-step "OAuth discovery (RFC 8414)"
-show "curl $BASE/.well-known/oauth-authorization-server"
-http "$BASE/.well-known/oauth-authorization-server"
-expect_status "$STATUS" 200 "discovery doc returns 200" "$BODY"
-for key in issuer authorization_endpoint token_endpoint jwks_uri registration_endpoint; do
-  if echo "$BODY" | grep -q "\"$key\""; then
-    ok "discovery doc contains $key"
-  else
-    fail "discovery doc missing $key"
-  fi
-done
-
-# ── 3. /oauth/authorize — must 302 to Pocket ID ─────────────────────────
-step "authorize redirect"
-show "curl -I '$BASE/oauth/authorize?client_id=smoke&response_type=code'"
-STATUS=$(curl -sS -o /dev/null -w '%{http_code}' -D /tmp/smoke-hdrs \
-  "$BASE/oauth/authorize?client_id=smoke&response_type=code" || true)
-expect_status "$STATUS" 302 "authorize returns 302" ""
-LOC=$(grep -i '^location:' /tmp/smoke-hdrs | head -1 | tr -d '\r\n' || true)
-rm -f /tmp/smoke-hdrs
-if echo "$LOC" | grep -qi 'scope=openid'; then
-  ok "authorize injects 'scope=openid…' when missing"
+# ── 2. Protected-resource metadata (RFC 9728) ───────────────────────────
+# The DCR shim (oauth-authorization-server, /oauth/authorize) was removed
+# 2026-08-26; these steps tested it until 2026-11-09 and failed since.
+step "protected-resource metadata (RFC 9728)"
+show "curl $BASE/.well-known/oauth-protected-resource/mcp"
+http "$BASE/.well-known/oauth-protected-resource/mcp"
+expect_status "$STATUS" 200 "metadata returns 200" "$BODY"
+if echo "$BODY" | grep -q "\"resource\": *\"$BASE/mcp\""; then
+  ok "resource is $BASE/mcp"
 else
-  fail "authorize did not inject scope; Location: $LOC"
+  fail "resource is not $BASE/mcp: $BODY"
 fi
+if echo "$BODY" | grep -q 'pocketid'; then
+  ok "authorization_servers points at Pocket ID"
+else
+  fail "authorization_servers does not point at Pocket ID: $BODY"
+fi
+
+# ── 3. Tokenless MCP call is refused (fail closed) ──────────────────────
+step "tokenless /mcp → 401"
+show "curl -X POST $BASE/mcp (no Authorization header)"
+STATUS=$(curl -sS -o /dev/null -w '%{http_code}' -D /tmp/smoke-hdrs -X POST "$BASE/mcp" \
+  -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' || true)
+expect_status "$STATUS" 401 "tokenless call returns 401" ""
+if grep -qi '^www-authenticate:.*resource_metadata' /tmp/smoke-hdrs; then
+  ok "WWW-Authenticate points clients at the resource metadata"
+else
+  fail "401 without a resource_metadata hint"
+fi
+rm -f /tmp/smoke-hdrs
 
 # ── 4. Authenticated MCP flow (requires $TOKEN) ─────────────────────────
 if [ -z "$TOKEN" ]; then

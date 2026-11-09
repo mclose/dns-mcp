@@ -15,7 +15,7 @@ import json
 import logging
 
 import pytest
-from mcp.server.fastmcp.exceptions import ToolError
+from fastmcp.exceptions import ToolError
 
 from dns_mcp import server as server_mod
 from dns_mcp import tracking
@@ -62,7 +62,9 @@ def _lines(h: _ListHandler) -> list[dict]:
 
 @pytest.fixture
 def app():
-    return create_server()
+    from tests.conftest import ClientApp
+
+    return ClientApp(create_server())
 
 
 # ── Decorator-level ──────────────────────────────────────────────────────
@@ -136,30 +138,30 @@ def test_non_subject_arguments_never_logged(tool_log) -> None:
     assert "headers" not in json.loads(raw)
 
 
-def test_session_id_read_from_request_header(tool_log) -> None:
-    from mcp.server.lowlevel.server import request_ctx
-    from mcp.shared.context import RequestContext
+def test_session_id_and_sub_read_from_request(tool_log, monkeypatch) -> None:
+    """session_id comes from the request's mcp-session-id header and sub from
+    the authenticated token, both via fastmcp's public dependency helpers."""
+    import types
 
-    class _Req:
-        headers = {"mcp-session-id": "sess-abc123"}
+    import fastmcp.server.dependencies as deps
 
-    @track("demo_sess")
-    async def fn() -> dict:
+    monkeypatch.setattr(
+        deps,
+        "get_http_request",
+        lambda: types.SimpleNamespace(headers={"mcp-session-id": "sess-abc123"}),
+    )
+    monkeypatch.setattr(
+        deps, "get_access_token", lambda: types.SimpleNamespace(claims={"sub": "user-123"})
+    )
+
+    @track("ping")
+    async def ping() -> dict:
         return {}
 
-    async def run() -> None:
-        tok = request_ctx.set(
-            RequestContext(
-                request_id=1, meta=None, session=None, lifespan_context=None, request=_Req()
-            )
-        )
-        try:
-            await fn()
-        finally:
-            request_ctx.reset(tok)
-
-    asyncio.run(run())
-    assert _lines(tool_log)[0]["session_id"] == "sess-abc123"
+    asyncio.run(ping())
+    line = _lines(tool_log)[0]
+    assert line["session_id"] == "sess-abc123"
+    assert line["sub"] == "user-123"
 
 
 # ── Through the FastMCP app ──────────────────────────────────────────────

@@ -1,4 +1,4 @@
-.PHONY: build rebuild lint import-check shell deploy logs status test smoke bump-dns_tool verify-prod coverage-check
+.PHONY: build rebuild lint import-check shell deploy logs status test smoke bump-dns_tool verify-prod coverage-check install check upgrade
 
 build:
 	docker build -t dns-mcp:dev .
@@ -6,8 +6,23 @@ build:
 rebuild:
 	docker build --no-cache -t dns-mcp:dev .
 
+install:  ## uv sync --locked → .venv
+	~/.local/bin/uv sync --locked
+
+check:  ## ruff + format check + pytest + wrapper coverage (pre-commit hook runs this)
+	.venv/bin/ruff check .
+	.venv/bin/ruff format --check .
+	.venv/bin/pytest -q
+	.venv/bin/python scripts/check_wrapper_coverage.py
+
+upgrade:  ## move the lock deliberately, then check
+	~/.local/bin/uv lock --upgrade
+	~/.local/bin/uv sync --locked
+	$(MAKE) check
+
 lint:
-	pre-commit run --all-files
+	.venv/bin/ruff check .
+	.venv/bin/ruff format --check .
 
 import-check: build
 	docker run --rm \
@@ -35,7 +50,7 @@ status:
 # Local unit tests. Hits no network — all externalities (JWKS endpoint,
 # Pocket ID admin API, DoH) are mocked.
 test:
-	venv/bin/pytest tests/ -v
+	.venv/bin/pytest -q
 
 # End-to-end curl-based smoke. Doubles as usage documentation; defaults to
 # production. Pass DNS_MCP_TOKEN=<jwt> to exercise the authenticated MCP
@@ -47,7 +62,7 @@ smoke:
 # must have a matching @app.tool() in server.py. Run on its own to audit,
 # or as part of `make bump-dns_tool`.
 coverage-check:
-	venv/bin/python scripts/check_wrapper_coverage.py
+	.venv/bin/python scripts/check_wrapper_coverage.py
 
 # One-shot dns_tool version bump. Drives the full pre-deploy cycle so the
 # work doesn't depend on remembering steps:
@@ -57,7 +72,7 @@ coverage-check:
 #      functions that aren't wrapped here yet (you must add the @app.tool()
 #      wrappers manually before re-running)
 #   4. make build — rebuild the Docker image (pulls the new tarball)
-#   5. make test — full pytest suite (64 tests)
+#   5. make test — full pytest suite
 #   6. make import-check — final sanity inside the built image
 #   7. Commit the pin bump. Does NOT push; review the diff and `make deploy`
 #      when ready.
@@ -68,8 +83,9 @@ bump-dns_tool:
 	@echo "→ Rewriting URL pin to dns_tool-$(V)"
 	sed -i 's|dns_tool-[0-9][^"]*\.whl|dns_tool-$(V)-py3-none-any.whl|' pyproject.toml
 	@grep "dns-tool @" pyproject.toml
-	@echo "→ Installing dns_tool $(V) into venv"
-	venv/bin/pip install --upgrade "dns-tool @ https://dist.lab.deflationhollow.net/dns_tool-$(V)-py3-none-any.whl"
+	@echo "→ Re-locking and installing dns_tool $(V) (uv.lock must match the pin)"
+	~/.local/bin/uv lock --upgrade-package dns-tool
+	~/.local/bin/uv sync --locked
 	@echo "→ Wrapper-coverage check"
 	$(MAKE) coverage-check
 	@echo "→ Rebuilding Docker image"
@@ -79,7 +95,7 @@ bump-dns_tool:
 	@echo "→ Import-check inside image"
 	$(MAKE) import-check
 	@echo "→ Committing pin bump"
-	git add pyproject.toml
+	git add pyproject.toml uv.lock
 	@git diff --cached --quiet && echo "pin already at $(V)" || \
 	    git commit -m "pin: bump dns_tool to $(V)"
 	@echo
