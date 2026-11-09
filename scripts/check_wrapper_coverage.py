@@ -24,7 +24,6 @@ import sys
 # Settings reads required env at import time. Provide dummies so create_server
 # can instantiate inside this script (no real Pocket ID is contacted).
 os.environ.setdefault("POCKET_ID_BASE_URL", "https://dummy.example.com")
-os.environ.setdefault("POCKET_ID_API_KEY", "dummy")
 os.environ.setdefault("SERVER_URL", "https://dummy.example.com")
 
 DNS_TOOL_SUBMODULES = (

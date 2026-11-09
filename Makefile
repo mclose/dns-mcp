@@ -27,7 +27,6 @@ lint:
 import-check: build
 	docker run --rm \
 		-e POCKET_ID_BASE_URL=https://dummy.example.com \
-		-e POCKET_ID_API_KEY=dummy \
 		-e SERVER_URL=https://dummy.example.com \
 		--entrypoint python dns-mcp:dev \
 		-c "import asyncio; from dns_mcp.server import create_server; \
